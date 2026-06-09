@@ -1,7 +1,8 @@
-name: iOS Build
+name: iOS Build & Test
 
-# Baut die App auf einem echten macOS-Runner (kostenlos für öffentliche Repos).
-# So lässt sich auf Linux ohne Mac prüfen, ob der SwiftUI-Code kompiliert.
+# Baut und testet die App auf einem echten macOS-Runner (kostenlos für
+# öffentliche Repos). So lässt sich auf Linux ohne Mac prüfen, ob der
+# SwiftUI-Code kompiliert und die Unit-Tests grün sind.
 
 on:
   push:
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  test:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -17,12 +18,12 @@ jobs:
       - name: Xcode-Version anzeigen
         run: xcodebuild -version
 
-      - name: Build (iOS Simulator)
+      - name: Build & Test (iOS Simulator)
         run: |
           xcodebuild \
             -project IronJournal.xcodeproj \
             -scheme IronJournal \
-            -destination 'generic/platform=iOS Simulator' \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            test

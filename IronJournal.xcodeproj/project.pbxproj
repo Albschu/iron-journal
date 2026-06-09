@@ -8,14 +8,23 @@
 
 /* Begin PBXFileReference section */
 		E1A1000000000000000000A5 /* IronJournal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IronJournal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1A2000000000000000000C1 /* IronJournalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = IronJournalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E1A1000000000000000000A4 /* IronJournal */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = IronJournal; sourceTree = "<group>"; };
+		E1A2000000000000000000C2 /* IronJournalTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = IronJournalTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		E1A1000000000000000000A8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E1A2000000000000000000C5 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -29,6 +38,7 @@
 			isa = PBXGroup;
 			children = (
 				E1A1000000000000000000A4 /* IronJournal */,
+				E1A2000000000000000000C2 /* IronJournalTests */,
 				E1A1000000000000000000A3 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -37,6 +47,7 @@
 			isa = PBXGroup;
 			children = (
 				E1A1000000000000000000A5 /* IronJournal.app */,
+				E1A2000000000000000000C1 /* IronJournalTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -64,7 +75,38 @@
 			productReference = E1A1000000000000000000A5 /* IronJournal.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E1A2000000000000000000C3 /* IronJournalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E1A2000000000000000000C9 /* Build configuration list for PBXNativeTarget "IronJournalTests" */;
+			buildPhases = (
+				E1A2000000000000000000C4 /* Sources */,
+				E1A2000000000000000000C5 /* Frameworks */,
+				E1A2000000000000000000C6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E1A2000000000000000000C7 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E1A2000000000000000000C2 /* IronJournalTests */,
+			);
+			name = IronJournalTests;
+			productName = IronJournalTests;
+			productReference = E1A2000000000000000000C1 /* IronJournalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		E1A2000000000000000000C8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E1A1000000000000000000A1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E1A1000000000000000000A6;
+			remoteInfo = IronJournal;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		E1A1000000000000000000A1 /* Project object */ = {
@@ -76,6 +118,10 @@
 				TargetAttributes = {
 					E1A1000000000000000000A6 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					E1A2000000000000000000C3 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = E1A1000000000000000000A6;
 					};
 				};
 			};
@@ -95,12 +141,28 @@
 			projectRoot = "";
 			targets = (
 				E1A1000000000000000000A6 /* IronJournal */,
+				E1A2000000000000000000C3 /* IronJournalTests */,
 			);
 		};
 /* End PBXProject section */
 
+/* Begin PBXTargetDependency section */
+		E1A2000000000000000000C7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E1A1000000000000000000A6 /* IronJournal */;
+			targetProxy = E1A2000000000000000000C8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin PBXResourcesBuildPhase section */
 		E1A1000000000000000000A9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E1A2000000000000000000C6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -111,6 +173,13 @@
 
 /* Begin PBXSourcesBuildPhase section */
 		E1A1000000000000000000A7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E1A2000000000000000000C4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -293,6 +362,42 @@
 			};
 			name = Release;
 		};
+		E1A2000000000000000000CA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.albschu.IronJournalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/IronJournal.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/IronJournal";
+			};
+			name = Debug;
+		};
+		E1A2000000000000000000CB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.albschu.IronJournalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/IronJournal.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/IronJournal";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -310,6 +415,15 @@
 			buildConfigurations = (
 				E1A1000000000000000000B5 /* Debug */,
 				E1A1000000000000000000B6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E1A2000000000000000000C9 /* Build configuration list for PBXNativeTarget "IronJournalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E1A2000000000000000000CA /* Debug */,
+				E1A2000000000000000000CB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
