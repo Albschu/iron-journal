@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <title>Iron Journal</title>
+  <meta name="theme-color" content="#0e1021" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <!-- iOS „Zum Home-Bildschirm“ -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Iron Journal" />
+  <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main id="screen" class="screen"><!-- aktiver Tab-Inhalt --></main>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tab" data-tab="training" aria-label="Training">
+      <span class="tab-ico">🏋️</span><span class="tab-label">Training</span>
+    </button>
+    <button class="tab" data-tab="verlauf" aria-label="Verlauf">
+      <span class="tab-ico">🕑</span><span class="tab-label">Verlauf</span>
+    </button>
+    <button class="tab" data-tab="dashboard" aria-label="Dashboard">
+      <span class="tab-ico">📈</span><span class="tab-label">Dashboard</span>
+    </button>
+  </nav>
+
+  <!-- Modal-Schicht für Einheit / Bearbeiten -->
+  <div id="modal-root"></div>
+
+  <script type="module" src="./app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+    }
+  </script>
+</body>
+</html>

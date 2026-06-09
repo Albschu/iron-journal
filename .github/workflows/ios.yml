@@ -6,6 +6,10 @@ name: iOS Build & Test
 
 on:
   push:
+    paths-ignore:
+      - "web/**"
+      - ".github/workflows/pages.yml"
+      - "README.md"
   pull_request:
   workflow_dispatch:
 
