@@ -30,6 +30,10 @@ function fmtClock(totalSecs) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// Inline-SVGs für leere Zustände (statt system-abhängiger Emojis)
+const ICO_DUMBBELL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 9v6M7 6.5v11M17 6.5v11M20 9v6M7 12h10"/></svg>`;
+const ICO_CLOCK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v4.5l3 2"/></svg>`;
+
 // Zahlenfelder: beim Fokus alles markieren → schnelles Überschreiben im Gym.
 document.addEventListener("focusin", (e) => {
   if (e.target.matches('input[type="number"]')) e.target.select();
@@ -68,11 +72,13 @@ function renderTraining() {
 
   const rows = store.routines.map((r, i) => {
     const last = store.sessions.filter((s) => s.routineId === r.id).map((s) => s.date).sort().pop();
+    const preview = r.exercises.slice(0, 3).map((e) => e.name).filter(Boolean).join(" · ")
+      + (r.exercises.length > 3 ? " · …" : "");
     return `<button class="row" data-action="start" data-i="${i}">
       <span class="grow">
         <h3>${esc(r.name)}</h3>
-        <div class="sub">${r.exercises.length} Übungen</div>
-        ${last ? `<div class="sub2">Zuletzt ${relDate(last)}</div>` : ""}
+        <div class="sub">${r.exercises.length} Übungen${last ? ` · zuletzt ${relDate(last)}` : ""}</div>
+        ${preview ? `<div class="sub2">${esc(preview)}</div>` : ""}
       </span>
       <span class="play">▶</span>
     </button>`;
@@ -84,7 +90,7 @@ function renderTraining() {
     ${draftHtml}
     ${store.routines.length
       ? `<div class="card">${rows}</div>`
-      : `<div class="empty"><div class="big">🏋️</div><h2>Keine Workouts</h2>
+      : `<div class="empty"><div class="big">${ICO_DUMBBELL}</div><h2>Keine Workouts</h2>
          <p>Lege oben rechts ein neues Workout an.</p></div>`}
     <div class="card" style="margin-top:12px">
       <button class="row" data-action="edit-routine-list"><span class="grow">
@@ -105,15 +111,28 @@ function renderVerlauf() {
               <div class="sub2">${sessionCompletedSetCount(s)} Sätze · Volumen ${Math.round(sessionVolume(s))} kg</div>
             </span><span class="chev">›</span>
           </button>`).join("")}</div>`
-      : `<div class="empty"><div class="big">🕑</div><h2>Noch kein Training</h2>
+      : `<div class="empty"><div class="big">${ICO_CLOCK}</div><h2>Noch kein Training</h2>
          <p>Starte ein Workout im Tab „Training“.</p></div>`}`;
 }
 
 // ---------- Tab: Dashboard ----------
 function renderDashboard() {
   let html = `<h1 class="nav-title">Dashboard</h1>`;
+
+  // Wochen-Überblick (Woche beginnt Montag)
+  const monday = new Date();
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const week = store.sessions.filter((s) => new Date(s.date) >= monday);
+  const weekVol = Math.round(week.reduce((n, s) => n + sessionVolume(s), 0));
+  html += `<div class="card statgrid">
+    <div class="stat"><b>${week.length}</b><span>Diese Woche</span></div>
+    <div class="stat"><b>${new Intl.NumberFormat("de-DE").format(weekVol)}</b><span>kg Volumen</span></div>
+    <div class="stat"><b>${store.sessions.length}</b><span>Einheiten</span></div>
+  </div>`;
+
   if (store.sessions.length === 0)
-    html += `<div class="card"><div class="row"><span class="grow sub">
+    html += `<div class="card" style="margin-top:12px"><div class="row" style="cursor:default"><span class="grow sub">
       Sobald du trainierst, erscheinen hier deine Fortschritte und Steigerungs-Vorschläge.</span></div></div>`;
   for (const r of store.routines) {
     html += `<div class="section-title">${esc(r.name)}</div><div class="card">`;
@@ -234,14 +253,16 @@ function openSession(session, resumed = false) {
     if (restRemaining > 0) showRestBar();
   }
 
-  // -- Live-Statuszeile (Dauer · Sätze · Volumen) --
+  // -- Live-Statuszeile (Dauer · Sätze · Volumen) + Fortschrittsbalken --
   function refreshStats() {
     const el = body.querySelector("#sess-stats");
     if (!el) return;
     const secs = Math.max(0, Math.floor((Date.now() - new Date(session.date)) / 1000));
     const total = session.exercises.reduce((n, e) => n + workingSets(e.sets).length, 0);
-    el.innerHTML = `⏱ ${fmtClock(secs)} &nbsp;·&nbsp; ${sessionCompletedSetCount(session)}/${total} Sätze` +
-      ` &nbsp;·&nbsp; ${Math.round(sessionVolume(session))} kg`;
+    const done = sessionCompletedSetCount(session);
+    el.querySelector(".ss-txt").innerHTML =
+      `⏱ ${fmtClock(secs)} &nbsp;·&nbsp; ${done}/${total} Sätze &nbsp;·&nbsp; ${Math.round(sessionVolume(session))} kg`;
+    el.querySelector(".prog i").style.width = total ? `${Math.round((done / total) * 100)}%` : "0";
   }
   statsInterval = setInterval(refreshStats, 1000);
   refreshStats();
@@ -307,7 +328,7 @@ function openSession(session, resumed = false) {
 }
 
 function statsStripHtml() {
-  return `<div class="stats-strip" id="sess-stats"></div>`;
+  return `<div class="stats-strip" id="sess-stats"><div class="ss-txt"></div><div class="prog"><i></i></div></div>`;
 }
 
 function restBarHtml() {
@@ -327,7 +348,7 @@ function sessionBody(session) {
       .map((s) => `${s.reps}×${fmtWeightShort(s.weight)}`).join("  ") : "";
     const sets = ex.sets.map((s, si) => `
       <div class="setrow ${s.completed ? "done" : ""}">
-        <button class="check ${s.completed ? "on" : ""}" data-act="toggle" data-ex="${ei}" data-set="${si}">${s.completed ? "☑" : "○"}</button>
+        <button class="check ${s.completed ? "on" : ""}" data-act="toggle" data-ex="${ei}" data-set="${si}">${s.completed ? "✓" : ""}</button>
         ${s.isWarmup ? `<span class="warm-tag">Aufwärmen</span>` : `<span class="warm-tag"></span>`}
         <span class="spacer"></span>
         <span class="numwrap">
@@ -353,7 +374,7 @@ function openSessionDetail(id) {
     <div class="section-title">${esc(ex.name)}</div>
     <div class="card">${ex.sets.map((set) => `
       <div class="setrow">
-        <span class="check ${set.completed ? "on" : ""}">${set.completed ? "☑" : "○"}</span>
+        <span class="check ${set.completed ? "on" : ""}" style="cursor:default">${set.completed ? "✓" : ""}</span>
         ${set.isWarmup ? `<span class="warm-tag">Aufwärmen</span>` : `<span class="warm-tag"></span>`}
         <span class="spacer"></span>
         <span>${set.reps} × ${fmtWeight(set.weight)}</span>
@@ -476,8 +497,8 @@ function editBody(routine) {
   const ex = routine.exercises.map((e, ei) => {
     const targets = e.targets.map((t, ti) => `
       <div class="setrow">
-        <button class="check" data-act="warm" data-ex="${ei}" data-t="${ti}"
-          style="color:${t.isWarmup ? "var(--orange)" : "var(--faint)"}">${t.isWarmup ? "🔥" : "○"}</button>
+        <button class="check ${t.isWarmup ? "won" : ""}" data-act="warm" data-ex="${ei}" data-t="${ti}"
+          title="Aufwärmsatz umschalten">${t.isWarmup ? "🔥" : ""}</button>
         <span class="spacer"></span>
         <span class="numwrap">
           <input class="w-reps" type="number" inputmode="numeric" value="${t.reps}" data-ex="${ei}" data-t="${ti}" data-field="reps">
