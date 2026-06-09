@@ -58,6 +58,7 @@ struct RoutineEditView: View {
             }
             .navigationTitle(isNew ? "Neues Workout" : "Bearbeiten")
             .navigationBarTitleDisplayMode(.inline)
+            .keyboardDoneToolbar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Abbrechen") { dismiss() }

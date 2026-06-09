@@ -40,6 +40,7 @@ struct ActiveSessionView: View {
                     .fontWeight(.semibold)
                 }
             }
+            .keyboardDoneToolbar()
         }
     }
 }
