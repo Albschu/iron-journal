@@ -125,10 +125,41 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
   border-top: 1px solid var(--line); padding-bottom: var(--safe-bot);
 }
 .tab { flex: 1; background: none; border: none; padding: 8px 0 6px; display: flex; flex-direction: column;
-  align-items: center; gap: 2px; color: var(--faint); cursor: pointer; }
-.tab .tab-ico { font-size: 22px; filter: grayscale(1) opacity(0.7); }
+  align-items: center; gap: 3px; color: var(--faint); cursor: pointer; transition: color 0.15s; }
+.tab svg { width: 23px; height: 23px; }
 .tab .tab-label { font-size: 10px; font-weight: 600; }
 .tab.active { color: var(--tint); }
-.tab.active .tab-ico { filter: none; }
 
 .swipe-hint { color: var(--faint); font-size: 12px; text-align: center; margin: 8px 0 0; }
+
+/* Entwurf-Banner (angefangene Einheit) */
+.banner { border: 1px solid rgba(124,140,248,0.45); margin-bottom: 14px;
+  box-shadow: 0 0 24px rgba(124,140,248,0.12); }
+.banner h3 { color: var(--tint); }
+
+/* Live-Statuszeile in der aktiven Einheit */
+.stats-strip { position: sticky; top: 0; z-index: 3;
+  background: rgba(14,16,33,0.94); backdrop-filter: blur(10px);
+  margin: 0 -16px; padding: 10px 16px; text-align: center;
+  font-size: 13px; font-weight: 650; color: var(--muted);
+  border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+
+/* Pausen-Timer */
+.restbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card2); border-top: 1px solid var(--line);
+  padding: 12px 16px calc(12px + var(--safe-bot));
+  animation: slideup 0.2s ease; }
+.restbar .rt-label { font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--muted); }
+.restbar .rt-time { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--tint); }
+.restbar.rt-done .rt-time { color: var(--green); font-size: 17px; }
+
+/* Erledigte Sätze */
+.setrow.done { background: rgba(52,211,153,0.06); }
+.setrow.done input { opacity: 0.55; }
+
+/* Satz-löschen-Kreuz */
+.del-x { background: none; border: none; color: var(--faint); font-size: 14px;
+  padding: 6px 2px 6px 8px; cursor: pointer; }
+.del-x:active { color: #ff7a85; }

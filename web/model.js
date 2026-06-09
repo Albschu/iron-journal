@@ -4,6 +4,7 @@
 export const STORAGE_KEYS = {
   routines: "ironjournal.routines",
   sessions: "ironjournal.sessions",
+  draft: "ironjournal.draft",
 };
 
 export function uid() {
@@ -54,6 +55,19 @@ export function sessionCompletedSetCount(session) {
 export function topTargetWeight(ex) {
   const w = ex.targets.map((t) => t.weight);
   return w.length ? Math.max(...w) : 0;
+}
+
+/// Geschätztes 1-Repetition-Maximum nach Epley: w · (1 + reps/30).
+export function epley1RM(weight, reps) {
+  if (weight <= 0 || reps <= 0) return 0;
+  if (reps === 1) return weight;
+  return weight * (1 + reps / 30);
+}
+
+/// Bestes geschätztes 1RM über die Arbeitssätze einer geloggten Übung.
+export function best1RM(loggedExercise) {
+  const vals = workingSets(loggedExercise.sets).map((s) => epley1RM(s.weight, s.reps));
+  return vals.length ? Math.max(...vals) : 0;
 }
 
 // MARK: - Progressive Overload
@@ -184,6 +198,45 @@ export class Store {
   deleteRoutine(id) {
     this.routines = this.routines.filter((r) => r.id !== id);
     this._save();
+  }
+
+  // -- Entwurf einer laufenden Einheit (übersteht Reload/App-Schließen) --
+
+  saveDraft(session) {
+    this.storage.setItem(STORAGE_KEYS.draft, JSON.stringify(session));
+  }
+
+  loadDraft() {
+    return this._load(STORAGE_KEYS.draft);
+  }
+
+  clearDraft() {
+    if (this.storage.removeItem) this.storage.removeItem(STORAGE_KEYS.draft);
+    else this.storage.setItem(STORAGE_KEYS.draft, "");
+  }
+
+  // -- Backup --
+
+  exportData() {
+    return JSON.stringify(
+      { app: "iron-journal", version: 1, exportedAt: new Date().toISOString(),
+        routines: this.routines, sessions: this.sessions },
+      null, 2
+    );
+  }
+
+  /// Importiert ein Backup. Liefert true bei Erfolg, false bei ungültigen Daten.
+  importData(json) {
+    try {
+      const d = JSON.parse(json);
+      if (!Array.isArray(d.routines) || !Array.isArray(d.sessions)) return false;
+      this.routines = d.routines;
+      this.sessions = d.sessions;
+      this._save();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

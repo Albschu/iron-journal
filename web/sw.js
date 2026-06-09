@@ -1,5 +1,5 @@
 // Service Worker – cached die App-Shell, damit Iron Journal offline läuft.
-const CACHE = "ironjournal-v1";
+const CACHE = "ironjournal-v2";
 const ASSETS = [
   "./", "./index.html", "./styles.css", "./app.js", "./model.js",
   "./manifest.webmanifest",
@@ -20,6 +20,18 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
+  // Navigationen: network-first, damit Updates sofort ankommen; offline aus dem Cache.
+  if (e.request.mode === "navigate") {
+    e.respondWith(
+      fetch(e.request).then((resp) => {
+        const copy = resp.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        return resp;
+      }).catch(() => caches.match(e.request).then((hit) => hit || caches.match("./index.html")))
+    );
+    return;
+  }
+  // Statische Assets: cache-first.
   e.respondWith(
     caches.match(e.request).then((hit) =>
       hit ||

@@ -2,13 +2,17 @@
 // Ausführen:  node web/test.mjs
 import {
   Store, routine, exercise, setTarget,
-  exerciseVolume, exerciseTopWeight,
+  exerciseVolume, exerciseTopWeight, epley1RM, best1RM,
 } from "./model.js";
 
 // In-Memory-Storage als localStorage-Ersatz.
 function memStorage() {
   const m = new Map();
-  return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v) };
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, v),
+    removeItem: (k) => m.delete(k),
+  };
 }
 
 let pass = 0, fail = 0;
@@ -111,6 +115,42 @@ const w = (s, i = 0) => s.routines[0].exercises[0].targets[i].weight;
   ]};
   eq(exerciseVolume(logged), 160, "Volumen nur Arbeitssätze");
   eq(exerciseTopWeight(logged), 20, "Top-Gewicht nur Arbeitssätze");
+}
+
+// 10: 1RM-Schätzung (Epley)
+{
+  eq(epley1RM(100, 1), 100, "1RM bei 1 Wdh = Gewicht");
+  eq(epley1RM(20, 8), 20 * (1 + 8 / 30), "Epley-Formel");
+  eq(epley1RM(0, 25), 0, "Körpergewicht → kein 1RM");
+  const logged = { sets: [
+    { reps: 8, weight: 20, isWarmup: false, completed: true },
+    { reps: 5, weight: 25, isWarmup: false, completed: true },
+    { reps: 12, weight: 40, isWarmup: true, completed: true },
+  ]};
+  eq(best1RM(logged), 25 * (1 + 5 / 30), "best1RM ignoriert Aufwärmsätze");
+}
+// 11: Entwurf speichern/laden/löschen
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  const ses = s.makeSession(r);
+  s.saveDraft(ses);
+  eq(s.loadDraft().id === ses.id ? 1 : 0, 1, "Draft-Roundtrip behält ID");
+  s.clearDraft();
+  eq(s.loadDraft() === null ? 1 : 0, 1, "clearDraft entfernt Entwurf");
+}
+// 12: Backup Export/Import
+{
+  const r = routine("Mein Spezial-Plan", [exercise("Kniebeuge", [setTarget(5, 60)], 2.5)]);
+  const a = freshStore([r]);
+  const ses = a.makeSession(r); completeAllWorking(ses); a.saveSession(ses);
+  const json = a.exportData();
+  const b = new Store(memStorage());
+  eq(b.importData(json) ? 1 : 0, 1, "Import eines gültigen Backups");
+  eq(b.routines[0].name === "Mein Spezial-Plan" ? 1 : 0, 1, "Routinen importiert");
+  eq(b.sessions.length, 1, "Sessions importiert");
+  eq(b.importData("kein json {") ? 0 : 1, 1, "Import lehnt Müll ab");
+  eq(b.importData('{"routines":42}') ? 0 : 1, 1, "Import lehnt falsche Struktur ab");
 }
 
 console.log(`\n${pass} Tests bestanden, ${fail} fehlgeschlagen`);
