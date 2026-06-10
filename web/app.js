@@ -14,6 +14,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return isNaN(n) ? 0 : n; };
 const nf = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 });
+const plural = (n, sing, plu) => `${n} ${n === 1 ? sing : plu}`;
 
 function relDate(iso) {
   const days = Math.round((Date.now() - new Date(iso)) / 86400000);
@@ -77,7 +78,7 @@ function renderTraining() {
     return `<button class="row" data-action="start" data-i="${i}">
       <span class="grow">
         <h3>${esc(r.name)}</h3>
-        <div class="sub">${r.exercises.length} Übungen${last ? ` · zuletzt ${relDate(last)}` : ""}</div>
+        <div class="sub">${plural(r.exercises.length, "Übung", "Übungen")}${last ? ` · zuletzt ${relDate(last)}` : ""}</div>
         ${preview ? `<div class="sub2">${esc(preview)}</div>` : ""}
       </span>
       <span class="play">▶</span>
@@ -101,16 +102,28 @@ function renderTraining() {
 // ---------- Tab: Verlauf ----------
 function renderVerlauf() {
   const sorted = store.sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Nach Monat gruppieren – gibt langen Listen Struktur.
+  const groups = [];
+  for (const s of sorted) {
+    const key = new Date(s.date).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+    if (!groups.length || groups.at(-1).key !== key) groups.push({ key, items: [] });
+    groups.at(-1).items.push(s);
+  }
+
+  const row = (s) => `
+    <button class="row" data-action="session-detail" data-id="${s.id}">
+      <span class="grow">
+        <div style="display:flex;justify-content:space-between"><h3>${esc(s.routineName)}</h3>
+          <span class="sub">${fmtDate(s.date)}</span></div>
+        <div class="sub2">${plural(sessionCompletedSetCount(s), "Satz", "Sätze")} · Volumen ${Math.round(sessionVolume(s))} kg</div>
+      </span><span class="chev">›</span>
+    </button>`;
+
   screen.innerHTML = `<h1 class="nav-title">Verlauf</h1>
     ${sorted.length
-      ? `<div class="card">${sorted.map((s) => `
-          <button class="row" data-action="session-detail" data-id="${s.id}">
-            <span class="grow">
-              <div style="display:flex;justify-content:space-between"><h3>${esc(s.routineName)}</h3>
-                <span class="sub">${fmtDate(s.date)}</span></div>
-              <div class="sub2">${sessionCompletedSetCount(s)} Sätze · Volumen ${Math.round(sessionVolume(s))} kg</div>
-            </span><span class="chev">›</span>
-          </button>`).join("")}</div>`
+      ? groups.map((g) => `<div class="section-title">${esc(g.key)}</div>
+          <div class="card">${g.items.map(row).join("")}</div>`).join("")
       : `<div class="empty"><div class="big">${ICO_CLOCK}</div><h2>Noch kein Training</h2>
          <p>Starte ein Workout im Tab „Training“.</p></div>`}`;
 }
@@ -212,12 +225,14 @@ screen.addEventListener("click", (e) => {
 
 // ---------- Modal-Grundgerüst ----------
 function openModal(title, bodyHtml, opts = {}) {
-  const { onDone, doneLabel = "Fertig", cancelLabel = "Abbrechen", onCancel, cleanup } = opts;
+  const { onDone, doneLabel = "Fertig", cancelLabel = "Abbrechen", onCancel, cleanup, single } = opts;
   const m = document.createElement("div");
   m.className = "modal";
+  // single: reine Anzeige-Modals haben nur einen „Fertig“-Button –
+  // zwei Buttons, die beide nur schließen, verwirren.
   m.innerHTML = `
     <div class="modal-bar">
-      <button class="btn-text" data-x="close">${esc(cancelLabel)}</button>
+      <button class="btn-text" data-x="close" ${single ? 'style="visibility:hidden"' : ""}>${esc(cancelLabel)}</button>
       <h2>${esc(title)}</h2>
       <button class="btn-text" data-x="done" style="font-weight:700">${esc(doneLabel)}</button>
     </div>
@@ -250,6 +265,7 @@ function openSession(session, resumed = false) {
 
   function refresh() {
     body.innerHTML = statsStripHtml(session) + sessionBody(session) + restBarHtml();
+    refreshStats();                    // sofort füllen, nicht erst beim nächsten Tick
     if (restRemaining > 0) showRestBar();
   }
 
@@ -260,8 +276,12 @@ function openSession(session, resumed = false) {
     const secs = Math.max(0, Math.floor((Date.now() - new Date(session.date)) / 1000));
     const total = session.exercises.reduce((n, e) => n + workingSets(e.sets).length, 0);
     const done = sessionCompletedSetCount(session);
+    // Nur tatsächlich abgehakte Arbeitssätze zählen – nicht das geplante Volumen.
+    const doneVol = session.exercises.reduce((sum, e) =>
+      sum + e.sets.filter((s) => s.completed && !s.isWarmup)
+        .reduce((n, s) => n + s.reps * s.weight, 0), 0);
     el.querySelector(".ss-txt").innerHTML =
-      `⏱ ${fmtClock(secs)} &nbsp;·&nbsp; ${done}/${total} Sätze &nbsp;·&nbsp; ${Math.round(sessionVolume(session))} kg`;
+      `⏱ ${fmtClock(secs)} &nbsp;·&nbsp; ${done}/${total} Sätze &nbsp;·&nbsp; ${Math.round(doneVol)} kg`;
     el.querySelector(".prog i").style.width = total ? `${Math.round((done / total) * 100)}%` : "0";
   }
   statsInterval = setInterval(refreshStats, 1000);
@@ -380,7 +400,7 @@ function openSessionDetail(id) {
         <span>${set.reps} × ${fmtWeight(set.weight)}</span>
       </div>`).join("")}</div>`).join("") +
     `<div style="margin-top:24px"><button class="btn btn-block btn-ghost btn-danger" id="del">Einheit löschen</button></div>`;
-  const modal = openModal(fmtDate(s.date), body);
+  const modal = openModal(fmtDate(s.date), body, { single: true });
   modal.body.querySelector("#del").onclick = () => {
     if (confirm("Diese Einheit löschen?")) { store.deleteSession(id); modal.close(); render(); }
   };
@@ -393,8 +413,11 @@ function openProgress(routineId, exerciseId) {
     const ex = r?.exercises.find((x) => x.id === exerciseId);
     if (!ex) return "";
     const hist = store.history(exerciseId);
-    const targetsHtml = ex.targets.map((t) => `
-      <div class="setrow">${t.isWarmup ? `<span class="warm-tag">Aufwärmen</span>` : ``}
+    const targetsHtml = ex.targets.map((t, i) => `
+      <div class="setrow">
+        ${t.isWarmup
+          ? `<span class="warm-tag">Aufwärmen</span>`
+          : `<span class="warm-tag" style="color:var(--faint)">Satz ${i + 1}</span>`}
         <span class="spacer"></span><span>${t.reps} × ${fmtWeight(t.weight)}</span></div>`).join("");
 
     // Geschätztes 1RM (Epley) über den Verlauf
@@ -435,7 +458,7 @@ function openProgress(routineId, exerciseId) {
   }
 
   const exName = store.routines.find((x) => x.id === routineId)?.exercises.find((x) => x.id === exerciseId)?.name || "";
-  const modal = openModal(exName, build());
+  const modal = openModal(exName, build(), { single: true });
   modal.body.addEventListener("click", (e) => {
     if (e.target.id === "adjust") {
       const r = store.routines.find((x) => x.id === routineId);
@@ -451,8 +474,8 @@ function openProgress(routineId, exerciseId) {
 function openRoutinePicker() {
   const body = `<div class="card">${store.routines.map((r, i) => `
     <button class="row" data-pick="${i}"><span class="grow"><h3>${esc(r.name)}</h3>
-      <div class="sub">${r.exercises.length} Übungen</div></span><span class="chev">›</span></button>`).join("")}</div>`;
-  const modal = openModal("Workouts", body);
+      <div class="sub">${plural(r.exercises.length, "Übung", "Übungen")}</div></span><span class="chev">›</span></button>`).join("")}</div>`;
+  const modal = openModal("Workouts", body, { single: true });
   modal.body.addEventListener("click", (e) => {
     const p = e.target.closest("[data-pick]"); if (!p) return;
     modal.close(); openRoutineEdit(structuredClone(store.routines[+p.dataset.pick]), false);
