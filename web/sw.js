@@ -1,5 +1,5 @@
 // Service Worker – cached die App-Shell, damit Iron Journal offline läuft.
-const CACHE = "ironjournal-v4";
+const CACHE = "ironjournal-v5";
 const ASSETS = [
   "./", "./index.html", "./styles.css", "./app.js", "./model.js",
   "./manifest.webmanifest",

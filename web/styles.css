@@ -219,3 +219,62 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
 .tab.active { color: var(--tint); }
 .tab.active .ico-wrap { background: rgba(139, 155, 255, 0.15); }
 .tab .tab-label { font-size: 10px; font-weight: 600; }
+
+/* ============================================================
+   Desktop (breite Fenster): Top-Navigation statt Bottom-Tabs,
+   Modals als zentrierte Dialoge, Hover-Zustände.
+   ============================================================ */
+@media (min-width: 760px) {
+  .screen { padding-top: 92px; padding-bottom: 48px; max-width: 680px; }
+
+  /* Tab-Leiste wird zur zentrierten Top-Navigation */
+  .tabbar {
+    top: 0; bottom: auto;
+    border-top: none; border-bottom: 1px solid var(--line);
+    padding: 6px 0; justify-content: center; gap: 6px;
+  }
+  .tab { flex: none; flex-direction: row; gap: 8px; padding: 9px 20px; border-radius: 999px; }
+  .tab svg { width: 19px; height: 19px; }
+  .ico-wrap { padding: 0; }
+  .tab.active .ico-wrap { background: none; }
+  .tab .tab-label { font-size: 14px; }
+  .tab:hover { color: var(--muted); background: rgba(255, 255, 255, 0.03); }
+  .tab.active { background: rgba(139, 155, 255, 0.13); }
+  .tab.active:hover { color: var(--tint); }
+
+  /* Hover-Affordanzen (Desktop hat einen Mauszeiger) */
+  .row:hover { background: var(--card2); }
+  .btn-text:hover { filter: brightness(1.2); }
+  .check:not(.on):not(.won):hover { border-color: var(--tint); }
+  .del-x:hover { color: #ff7a85; }
+
+  /* FAB an der Inhaltsspalte ausrichten, unter der Top-Nav */
+  .fab { top: 74px; right: max(16px, calc(50vw - 340px)); }
+
+  /* Modals als zentrierter Dialog statt Vollbild */
+  .modal {
+    inset: auto; left: 50%; top: 4vh;
+    transform: translateX(-50%);
+    width: 600px; max-width: calc(100vw - 48px);
+    height: 92vh;
+    border-radius: 22px;
+    border: 1px solid var(--line);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65);
+    animation: pop 0.18s ease;
+    overflow: hidden;
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: translateX(-50%) scale(0.97); }
+    to   { opacity: 1; transform: translateX(-50%) scale(1); }
+  }
+  .modal-bar { padding-top: 14px; }
+  .modal-body { padding-bottom: 28px; }
+
+  /* Pausen-Timer bleibt im Dialog (sticky am unteren Rand des Inhalts) */
+  .restbar {
+    position: sticky; bottom: 0; left: auto; right: auto;
+    margin: 14px -16px 0;
+    border-radius: 14px 14px 0 0;
+    padding-bottom: 12px;
+  }
+}
