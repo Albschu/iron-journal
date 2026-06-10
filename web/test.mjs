@@ -3,6 +3,7 @@
 import {
   Store, routine, exercise, setTarget,
   exerciseVolume, exerciseTopWeight, epley1RM, best1RM,
+  linearTrend, weeklyVolumes,
 } from "./model.js";
 
 // In-Memory-Storage als localStorage-Ersatz.
@@ -151,6 +152,34 @@ const w = (s, i = 0) => s.routines[0].exercises[0].targets[i].weight;
   eq(b.sessions.length, 1, "Sessions importiert");
   eq(b.importData("kein json {") ? 0 : 1, 1, "Import lehnt Müll ab");
   eq(b.importData('{"routines":42}') ? 0 : 1, 1, "Import lehnt falsche Struktur ab");
+}
+
+// 13: Trend (lineare Regression)
+{
+  const pts = [0, 1, 2, 3, 4].map((t) => ({ t, y: 2 * t + 1 }));
+  const reg = linearTrend(pts);
+  eq(reg.slope, 2, "Trend-Steigung exakt");
+  eq(reg.intercept, 1, "Trend-Achsenabschnitt exakt");
+  eq(linearTrend([{ t: 0, y: 1 }]) === null ? 1 : 0, 1, "Trend braucht ≥2 Punkte");
+  eq(linearTrend([{ t: 5, y: 1 }, { t: 5, y: 9 }]) === null ? 1 : 0, 1, "Degenerierte X-Werte → null");
+}
+// 14: Wochenvolumen-Buckets
+{
+  const r = routine("Push", [exercise("Bank", [setTarget(10, 10)], 2.5)]);
+  const s = freshStore([r]);
+  const now = new Date("2026-06-10T12:00:00"); // Mittwoch
+  const mk = (daysAgo) => {
+    const ses = s.makeSession(r);
+    ses.date = new Date(now.getTime() - daysAgo * 86400000).toISOString();
+    return ses;
+  };
+  s.sessions = [mk(0), mk(1), mk(8)]; // 2× diese Woche, 1× Vorwoche
+  const buckets = weeklyVolumes(s.sessions, 8, now);
+  eq(buckets.length, 8, "8 Wochen-Buckets");
+  eq(buckets.at(-1).sessions, 2, "aktuelle Woche: 2 Einheiten");
+  eq(buckets.at(-2).sessions, 1, "Vorwoche: 1 Einheit");
+  eq(buckets.at(-1).volume, 200, "Volumen der Woche summiert (2×100)");
+  eq(buckets[0].sessions, 0, "alte Wochen leer");
 }
 
 console.log(`\n${pass} Tests bestanden, ${fail} fehlgeschlagen`);

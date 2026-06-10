@@ -1,7 +1,8 @@
 import {
   Store, routine as mkRoutine, exercise as mkExercise, setTarget as mkTarget,
   exerciseVolume, exerciseTopWeight, sessionVolume, sessionCompletedSetCount,
-  topTargetWeight, workingSets, best1RM, fmtWeight, fmtWeightShort, fmtDate,
+  topTargetWeight, workingSets, best1RM, linearTrend, weeklyVolumes,
+  fmtWeight, fmtWeightShort, fmtDate,
 } from "./model.js";
 
 const store = new Store(window.localStorage);
@@ -144,6 +145,17 @@ function renderDashboard() {
     <div class="stat"><b>${store.sessions.length}</b><span>Einheiten</span></div>
   </div>`;
 
+  // Wochenvolumen-Chart (letzte 8 Wochen) – antippen zeigt Details.
+  if (store.sessions.length) {
+    const buckets = weeklyVolumes(store.sessions, 8);
+    const pts = buckets.map((b) => ({
+      y: b.volume,
+      label: b.start.toLocaleDateString("de-DE", { day: "numeric", month: "numeric" }),
+      v: `${plural(b.sessions, "Einheit", "Einheiten")} · ${Math.round(b.volume)} kg`,
+    }));
+    html += `<div class="section-title">Wochenvolumen</div>${chartCard(barChart(pts))}`;
+  }
+
   if (store.sessions.length === 0)
     html += `<div class="card" style="margin-top:12px"><div class="row" style="cursor:default"><span class="grow sub">
       Sobald du trainierst, erscheinen hier deine Fortschritte und Steigerungs-Vorschläge.</span></div></div>`;
@@ -239,7 +251,12 @@ function openModal(title, bodyHtml, opts = {}) {
     <div class="modal-body">${bodyHtml}</div>`;
   modalRoot.appendChild(m);
   document.body.style.overflow = "hidden";
-  const close = () => { cleanup && cleanup(); m.remove(); document.body.style.overflow = ""; };
+  const close = () => {
+    cleanup && cleanup();
+    m.remove();
+    // Scroll-Sperre nur aufheben, wenn kein weiteres Modal offen ist (Stacking).
+    document.body.style.overflow = modalRoot.querySelector(".modal") ? "hidden" : "";
+  };
   m.querySelector('[data-x="close"]').onclick = () => { onCancel && onCancel(); close(); render(); };
   m.querySelector('[data-x="done"]').onclick = () => { onDone && onDone(); close(); render(); };
   return { el: m, body: m.querySelector(".modal-body"), close };
@@ -330,6 +347,7 @@ function openSession(session, resumed = false) {
     const act = t.dataset.act;
     if (act === "rest-plus") { restRemaining += 30; showRestBar(); return; }
     if (act === "rest-skip") { stopRest(); return; }
+    if (act === "exprog") { openProgress(session.routineId, t.dataset.exid); return; }
     const ex = session.exercises[+t.dataset.ex];
     if (act === "toggle") {
       const s = ex.sets[+t.dataset.set];
@@ -379,7 +397,10 @@ function sessionBody(session) {
         </span>
         <button class="del-x" data-act="del-set-live" data-ex="${ei}" data-set="${si}" aria-label="Satz löschen">✕</button>
       </div>`).join("");
-    return `<div class="ex-head"><h3>${esc(ex.name)}</h3></div>
+    const linked = session.routineId && store.routines.find((r) => r.id === session.routineId)
+      ?.exercises.some((x) => x.id === ex.exerciseId);
+    return `<div class="ex-head"><h3>${esc(ex.name)}</h3>
+        ${linked ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}</div>
       ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}</div>` : ""}
       <div class="modal-grp" style="margin-top:4px">${sets}
         <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button></div>
@@ -433,12 +454,30 @@ function openProgress(routineId, exerciseId) {
 
     let charts = "";
     if (hist.length >= 2) {
-      const tw = hist.map((h) => ({ y: exerciseTopWeight(h.logged), label: fmtDate(h.date) }));
-      const vol = hist.map((h) => ({ y: exerciseVolume(h.logged), label: fmtDate(h.date) }));
+      const tw = hist.map((h) => ({
+        t: +new Date(h.date), y: exerciseTopWeight(h.logged),
+        label: fmtDate(h.date), v: fmtWeight(exerciseTopWeight(h.logged)),
+      }));
       charts = `<div class="section-title">Top-Gewicht</div>
-        <div class="card chart-card">${lineChart(tw)}</div>
-        <div class="section-title">Volumen (Wdh × kg)</div>
-        <div class="card chart-card">${barChart(vol)}</div>`;
+        ${trendSummary(tw)}
+        ${chartCard(lineChart(tw, { forecastWeeks: 4 }))}`;
+
+      const rms = hist.map((h) => ({
+        t: +new Date(h.date), y: best1RM(h.logged),
+        label: fmtDate(h.date), v: nf.format(best1RM(h.logged)) + " kg",
+      })).filter((p) => p.y > 0);
+      if (rms.length >= 2) {
+        charts += `<div class="section-title">Geschätztes 1RM</div>
+          ${trendSummary(rms)}
+          ${chartCard(lineChart(rms, { forecastWeeks: 4 }))}`;
+      }
+
+      const vol = hist.map((h) => ({
+        y: exerciseVolume(h.logged), label: fmtDate(h.date),
+        v: `${Math.round(exerciseVolume(h.logged))} kg`,
+      }));
+      charts += `<div class="section-title">Volumen (Wdh × kg)</div>
+        ${chartCard(barChart(vol))}`;
     }
     let table = "";
     if (hist.length) {
@@ -550,66 +589,171 @@ function editBody(routine) {
     <div style="margin-top:10px"><button class="btn btn-block btn-text btn-danger" data-act="del-routine">Workout löschen</button></div>`;
 }
 
-// ---------- SVG-Charts ----------
-function chartFrame(W, H, padL, padB, min, max, fmt) {
-  // 3 horizontale Gitterlinien mit Wert-Labels.
-  const padT = 18;
-  const lines = [0, 0.5, 1].map((f) => {
+// ---------- Interaktive SVG-Charts ----------
+// Punkte: { y, label, v (Anzeigetext) } – Line-Charts zusätzlich { t (ms) }.
+// Antippen/Wischen zeigt Crosshair + Tooltip; Line-Charts können eine
+// Prognose (lineare Regression, gestrichelt) in die Zukunft zeichnen.
+const CW = 340, CH = 170, PADL = 38, PADB = 24, PADT = 18;
+const WEEK_MS = 7 * 86400000;
+
+function gridLines(min, max, fmt) {
+  return [0, 0.5, 1].map((f) => {
     const v = min + (max - min) * f;
-    const y = H - padB - f * (H - padT - padB);
-    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - 10}" y2="${y.toFixed(1)}" stroke="#2b3160" stroke-dasharray="${f ? "3 4" : "0"}"/>
-      <text x="${padL - 5}" y="${(y + 3.5).toFixed(1)}" fill="#6b7099" font-size="10" text-anchor="end">${fmt(v)}</text>`;
+    const y = CH - PADB - f * (CH - PADT - PADB);
+    return `<line x1="${PADL}" y1="${y.toFixed(1)}" x2="${CW - 10}" y2="${y.toFixed(1)}" stroke="#2b3160" stroke-dasharray="${f ? "3 4" : "0"}"/>
+      <text x="${PADL - 5}" y="${(y + 3.5).toFixed(1)}" fill="#6b7099" font-size="10" text-anchor="end">${fmt(v)}</text>`;
   }).join("");
-  return { padT, lines };
 }
 
-function lineChart(points) {
-  const W = 340, H = 170, padL = 38, padB = 24;
-  const ys = points.map((p) => p.y);
+const crosshairHtml = `<g class="xh" visibility="hidden">
+    <line x1="0" x2="0" y1="${PADT}" y2="${CH - PADB}" stroke="#8b9bff" stroke-width="1" stroke-dasharray="2 3" opacity="0.8"/>
+    <circle cx="0" r="4.5" fill="none" stroke="#f4f5fa" stroke-width="2"/>
+  </g>`;
+
+function svgOpen(ptsAttr) {
+  const json = JSON.stringify(ptsAttr).replace(/'/g, "&#39;");
+  return `<svg class="chart" viewBox="0 0 ${CW} ${CH}" preserveAspectRatio="xMidYMid meet" data-w="${CW}" data-pts='${json}'>`;
+}
+
+function chartCard(svg) {
+  return `<div class="card chart-card">${svg}<div class="tip" hidden></div></div>`;
+}
+
+function lineChart(points, opts = {}) {
+  const hasTime = points.every((p) => Number.isFinite(p.t));
+  const t0 = hasTime ? points[0].t : 0;
+  let tEnd = hasTime ? points.at(-1).t : points.length - 1;
+
+  // Prognose: Regression über die Historie, gestrichelt fortgeschrieben.
+  let fc = null;
+  if (opts.forecastWeeks && hasTime && points.length >= 3) {
+    const reg = linearTrend(points.map((p) => ({ t: p.t, y: p.y })));
+    if (reg) {
+      const tF = points.at(-1).t + opts.forecastWeeks * WEEK_MS;
+      fc = { t1: points.at(-1).t, y1: reg.slope * points.at(-1).t + reg.intercept,
+             t2: tF, y2: Math.max(0, reg.slope * tF + reg.intercept) };
+      tEnd = tF;
+    }
+  }
+
+  const span = (tEnd - t0) || 1;
+  const X = (t, i) => PADL + (((hasTime ? t : i) - t0) / span) * (CW - PADL - 12);
+  const ys = points.map((p) => p.y).concat(fc ? [fc.y2] : []);
   const max = Math.max(...ys), rawMin = Math.min(...ys);
   const min = rawMin === max ? Math.max(0, rawMin - 1) : rawMin;
-  const span = max - min || 1;
-  const { padT, lines } = chartFrame(W, H, padL, padB, min, max, (v) => nf.format(v));
-  const x = (i) => padL + (i * (W - padL - 12)) / (points.length - 1 || 1);
-  const y = (v) => H - padB - ((v - min) / span) * (H - padT - padB);
-  const coords = points.map((p, i) => [x(i), y(p.y)]);
-  const pts = coords.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(" ");
-  const area = `M ${coords[0][0].toFixed(1)},${(H - padB).toFixed(1)} L ${pts.replace(/ /g, " L ")} L ${coords.at(-1)[0].toFixed(1)},${(H - padB).toFixed(1)} Z`;
+  const ySpan = max - min || 1;
+  const Y = (v) => CH - PADB - ((v - min) / ySpan) * (CH - PADT - PADB);
+
+  const coords = points.map((p, i) => [X(p.t, i), Y(p.y)]);
+  const ptsAttr = points.map((p, i) => ({ x: +coords[i][0].toFixed(1), y: +coords[i][1].toFixed(1), l: p.label, v: p.v }));
+  const lineStr = coords.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(" ");
+  const area = `M ${coords[0][0].toFixed(1)},${CH - PADB} L ${lineStr.replace(/ /g, " L ")} L ${coords.at(-1)[0].toFixed(1)},${CH - PADB} Z`;
   const dots = coords.map(([a, b], i) =>
-    `<circle cx="${a.toFixed(1)}" cy="${b.toFixed(1)}" r="${i === coords.length - 1 ? 5 : 3}" fill="#7c8cf8"/>`).join("");
+    `<circle cx="${a.toFixed(1)}" cy="${b.toFixed(1)}" r="${i === coords.length - 1 ? 4.5 : 3}" fill="#7c8cf8"/>`).join("");
+
+  let fcHtml = "";
+  if (fc) {
+    const x1 = X(fc.t1), x2 = X(fc.t2);
+    fcHtml = `<line x1="${x1.toFixed(1)}" y1="${Y(fc.y1).toFixed(1)}" x2="${x2.toFixed(1)}" y2="${Y(fc.y2).toFixed(1)}"
+        stroke="#b18cff" stroke-width="2" stroke-dasharray="5 5" opacity="0.85"/>
+      <circle cx="${x2.toFixed(1)}" cy="${Y(fc.y2).toFixed(1)}" r="4" fill="none" stroke="#b18cff" stroke-width="2"/>
+      <text x="${(x2 - 2).toFixed(1)}" y="${Math.max(12, Y(fc.y2) - 9).toFixed(1)}" fill="#b18cff" font-size="11" font-weight="700" text-anchor="end">≈ ${nf.format(fc.y2)}</text>`;
+  }
+
   const [lx, ly] = coords.at(-1);
-  const lastLbl = `<text x="${Math.min(lx, W - 46).toFixed(1)}" y="${Math.max(12, ly - 10).toFixed(1)}" fill="#f2f3f7" font-size="11" font-weight="700">${nf.format(points.at(-1).y)} kg</text>`;
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+  const lastLbl = `<text x="${lx.toFixed(1)}" y="${Math.max(12, ly - 10).toFixed(1)}" fill="#f2f3f7" font-size="11" font-weight="700" text-anchor="middle">${esc(points.at(-1).v)}</text>`;
+
+  return `${svgOpen(ptsAttr)}
     <defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#7c8cf8" stop-opacity="0.35"/>
       <stop offset="1" stop-color="#7c8cf8" stop-opacity="0.02"/>
     </linearGradient></defs>
-    ${lines}
+    ${gridLines(min, max, (v) => nf.format(v))}
     <path d="${area}" fill="url(#lg)"/>
-    <polyline points="${pts}" fill="none" stroke="#7c8cf8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
-    ${dots}${lastLbl}
-    <text x="${padL}" y="${H - 6}" fill="#6b7099" font-size="10">${points[0].label}</text>
-    <text x="${W - 10}" y="${H - 6}" fill="#6b7099" font-size="10" text-anchor="end">${points.at(-1).label}</text>
+    <polyline points="${lineStr}" fill="none" stroke="#7c8cf8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}${fcHtml}${lastLbl}
+    <text x="${PADL}" y="${CH - 6}" fill="#6b7099" font-size="10">${points[0].label}</text>
+    <text x="${CW - 10}" y="${CH - 6}" fill="#6b7099" font-size="10" text-anchor="end">${fc ? `+${opts.forecastWeeks} Wo.` : points.at(-1).label}</text>
+    ${crosshairHtml}
   </svg>`;
 }
 
 function barChart(points) {
-  const W = 340, H = 170, padL = 38, padB = 24;
   const max = Math.max(...points.map((p) => p.y)) || 1;
-  const { padT, lines } = chartFrame(W, H, padL, padB, 0, max, (v) => String(Math.round(v)));
-  const gap = (W - padL - 12) / points.length;
-  const bw = gap * 0.62;
+  const gap = (CW - PADL - 12) / points.length;
+  const bw = Math.min(gap * 0.62, 34);
+  const ptsAttr = [];
   const bars = points.map((p, i) => {
-    const h = (p.y / max) * (H - padT - padB);
-    const bx = padL + i * gap + (gap - bw) / 2;
-    const isLast = i === points.length - 1;
-    return `<rect x="${bx.toFixed(1)}" y="${(H - padB - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}" rx="3.5" fill="#7c8cf8" opacity="${isLast ? 1 : 0.55}"/>`;
+    const h = (p.y / max) * (CH - PADT - PADB);
+    const bx = PADL + i * gap + (gap - bw) / 2;
+    const ty = CH - PADB - h;
+    ptsAttr.push({ x: +(bx + bw / 2).toFixed(1), y: +ty.toFixed(1), l: p.label, v: p.v });
+    return `<rect x="${bx.toFixed(1)}" y="${ty.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h, 1.5).toFixed(1)}" rx="3.5" fill="#7c8cf8" opacity="${i === points.length - 1 ? 1 : 0.55}"/>`;
   }).join("");
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
-    ${lines}${bars}
-    <text x="${padL}" y="${H - 6}" fill="#6b7099" font-size="10">${points[0].label}</text>
-    <text x="${W - 10}" y="${H - 6}" fill="#6b7099" font-size="10" text-anchor="end">${points.at(-1).label}</text>
+  return `${svgOpen(ptsAttr)}
+    ${gridLines(0, max, (v) => String(Math.round(v)))}${bars}
+    <text x="${PADL}" y="${CH - 6}" fill="#6b7099" font-size="10">${points[0].label}</text>
+    <text x="${CW - 10}" y="${CH - 6}" fill="#6b7099" font-size="10" text-anchor="end">${points.at(-1).label}</text>
+    ${crosshairHtml}
   </svg>`;
 }
+
+/// Trend-Zusammenfassung unter Chart-Überschriften: Steigung/Woche + 4-Wochen-Prognose.
+function trendSummary(points) {
+  if (points.length < 3) return "";
+  const reg = linearTrend(points.map((p) => ({ t: p.t, y: p.y })));
+  if (!reg) return "";
+  const perWeek = reg.slope * WEEK_MS;
+  const proj = Math.max(0, reg.slope * (points.at(-1).t + 4 * WEEK_MS) + reg.intercept);
+  const arrow = perWeek > 0.05
+    ? `<span style="color:var(--green)">▲ +${nf.format(perWeek)} kg/Woche</span>`
+    : perWeek < -0.05
+      ? `<span style="color:#ff7a85">▼ ${nf.format(perWeek)} kg/Woche</span>`
+      : `<span>→ stabil</span>`;
+  return `<div class="trend">${arrow} · Prognose in 4 Wochen: <b>≈ ${nf.format(proj)} kg</b></div>`;
+}
+
+// ---------- Chart-Interaktion (Tippen/Wischen → Crosshair + Tooltip) ----------
+function chartScrub(e) {
+  const svg = e.target.closest && e.target.closest("svg.chart[data-pts]");
+  if (!svg) return;
+  const pts = JSON.parse(svg.dataset.pts);
+  if (!pts.length) return;
+  const rect = svg.getBoundingClientRect();
+  const vb = ((e.clientX - rect.left) / rect.width) * +svg.dataset.w;
+  let best = 0;
+  for (let i = 1; i < pts.length; i++)
+    if (Math.abs(pts[i].x - vb) < Math.abs(pts[best].x - vb)) best = i;
+  const p = pts[best];
+
+  const xh = svg.querySelector(".xh");
+  xh.setAttribute("visibility", "visible");
+  xh.setAttribute("transform", `translate(${p.x},0)`);
+  xh.querySelector("circle").setAttribute("cy", p.y);
+
+  const card = svg.closest(".chart-card");
+  const tip = card && card.querySelector(".tip");
+  if (tip) {
+    tip.hidden = false;
+    tip.textContent = `${p.l} · ${p.v}`;
+    const cardRect = card.getBoundingClientRect();
+    const cssX = rect.left - cardRect.left + (p.x / +svg.dataset.w) * rect.width;
+    tip.style.left = `${Math.min(Math.max(cssX - tip.offsetWidth / 2, 4), cardRect.width - tip.offsetWidth - 4)}px`;
+  }
+}
+
+function chartHide(e) {
+  const svg = e.target.closest && e.target.closest("svg.chart[data-pts]");
+  if (!svg) return;
+  if (e.relatedTarget && svg.contains(e.relatedTarget)) return;
+  const xh = svg.querySelector(".xh");
+  if (xh) xh.setAttribute("visibility", "hidden");
+  const tip = svg.closest(".chart-card")?.querySelector(".tip");
+  if (tip) tip.hidden = true;
+}
+
+document.addEventListener("pointermove", chartScrub);
+document.addEventListener("pointerdown", chartScrub);
+document.addEventListener("pointerout", chartHide);
 
 render();

@@ -70,6 +70,42 @@ export function best1RM(loggedExercise) {
   return vals.length ? Math.max(...vals) : 0;
 }
 
+/// Lineare Regression über (t, y)-Punkte → Trend/Prognose.
+/// Liefert { slope (y pro ms), intercept } oder null bei zu wenig Daten.
+export function linearTrend(points) {
+  const n = points.length;
+  if (n < 2) return null;
+  let st = 0, sy = 0, stt = 0, sty = 0;
+  for (const p of points) { st += p.t; sy += p.y; stt += p.t * p.t; sty += p.t * p.y; }
+  const denom = n * stt - st * st;
+  if (!denom) return null;
+  const slope = (n * sty - st * sy) / denom;
+  return { slope, intercept: (sy - slope * st) / n };
+}
+
+/// Trainingsvolumen je Kalenderwoche (Montag-basiert) der letzten `weeks`
+/// Wochen inkl. der aktuellen; älteste zuerst.
+export function weeklyVolumes(sessions, weeks = 8, now = new Date()) {
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const start = new Date(monday);
+  start.setDate(start.getDate() - (weeks - 1) * 7);
+  const buckets = Array.from({ length: weeks }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(d.getDate() + i * 7);
+    return { start: d, volume: 0, sessions: 0 };
+  });
+  for (const s of sessions) {
+    const idx = Math.floor((new Date(s.date) - start) / (7 * 86400000));
+    if (idx >= 0 && idx < weeks) {
+      buckets[idx].volume += sessionVolume(s);
+      buckets[idx].sessions++;
+    }
+  }
+  return buckets;
+}
+
 // MARK: - Progressive Overload
 
 export function metAllTargets(loggedExercise, targets) {
