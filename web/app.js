@@ -475,10 +475,13 @@ function sessionBody(session) {
         </span>
         <button class="del-x" data-act="del-set-live" data-ex="${ei}" data-set="${si}" aria-label="Satz löschen">✕</button>
       </div>`).join("");
-    const linked = session.routineId && store.routines.find((r) => r.id === session.routineId)
-      ?.exercises.some((x) => x.id === ex.exerciseId);
+    const rtEx = session.routineId && store.routines.find((r) => r.id === session.routineId)
+      ?.exercises.find((x) => x.id === ex.exerciseId);
+    const linked = !!rtEx;
+    const note = rtEx?.note?.trim();
     return `<div class="ex-head"><h3>${esc(ex.name)}</h3>
         ${linked ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}</div>
+      ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ""}
       ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}</div>` : ""}
       <div class="modal-grp" style="margin-top:4px">${sets}
         <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button></div>
@@ -609,10 +612,11 @@ function openRoutineEdit(routine, isNew) {
   const refresh = () => { body.innerHTML = editBody(routine); };
 
   body.addEventListener("input", (e) => {
-    const inp = e.target.closest("input"); if (!inp) return;
+    const inp = e.target.closest("input, textarea"); if (!inp) return;
     const f = inp.dataset.field;
     if (f === "rname") routine.name = inp.value;
     else if (f === "ename") routine.exercises[+inp.dataset.ex].name = inp.value;
+    else if (f === "enote") routine.exercises[+inp.dataset.ex].note = inp.value;
     else if (f === "inc") routine.exercises[+inp.dataset.ex].increment = num(inp.value);
     else {
       const tg = routine.exercises[+inp.dataset.ex].targets[+inp.dataset.t];
@@ -651,6 +655,8 @@ function editBody(routine) {
     return `<div class="modal-grp">
       <div class="setrow"><input type="text" style="width:100%;font-weight:650" placeholder="Übungsname"
         value="${esc(e.name)}" data-field="ename" data-ex="${ei}"></div>
+      <div class="setrow"><textarea class="ex-note-input" rows="1" placeholder="Notiz (z. B. Griff, Tempo, Hinweise)"
+        data-field="enote" data-ex="${ei}">${esc(e.note ?? "")}</textarea></div>
       ${targets}
       <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz</button>
         <span class="spacer"></span>
