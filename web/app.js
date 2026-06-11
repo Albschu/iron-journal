@@ -273,7 +273,11 @@ function openSession(session, resumed = false) {
     doneLabel: "Fertig",
     cancelLabel: "Schließen",
     onDone: () => { store.saveSession(session); store.clearDraft(); },
-    cleanup: () => { clearInterval(restInterval); clearInterval(statsInterval); },
+    cleanup: () => {
+      clearInterval(restInterval); clearInterval(statsInterval);
+      releaseWakeLock();
+      document.removeEventListener("visibilitychange", onVisibility);
+    },
   });
   const body = modal.body;
 
@@ -283,7 +287,7 @@ function openSession(session, resumed = false) {
   function refresh() {
     body.innerHTML = statsStripHtml(session) + sessionBody(session) + restBarHtml();
     refreshStats();                    // sofort füllen, nicht erst beim nächsten Tick
-    if (restRemaining > 0) showRestBar();
+    if (restEndAt) showRestBar();
   }
 
   // -- Live-Statuszeile (Dauer · Sätze · Volumen) + Fortschrittsbalken --
@@ -305,36 +309,107 @@ function openSession(session, resumed = false) {
   refreshStats();
 
   // -- Pausen-Timer: startet automatisch beim Abhaken eines Satzes --
-  let restRemaining = 0;
+  // Zeitstempel-basiert: die verbleibende Zeit wird aus der Zielzeit berechnet,
+  // damit der Timer auch nach App-Wechsel / Sperrbildschirm korrekt weiterläuft
+  // (setInterval wird vom Browser im Hintergrund gedrosselt oder pausiert).
+  let restEndAt = 0;          // Zielzeit in ms (Date.now-Basis), 0 = kein Timer
+  let restDoneFired = false;  // damit Signal nur einmal pro Pause feuert
+  function restSecsLeft() {
+    return restEndAt ? Math.max(0, Math.ceil((restEndAt - Date.now()) / 1000)) : 0;
+  }
   function showRestBar() {
     const bar = body.querySelector("#restbar");
     if (!bar) return;
+    const left = restSecsLeft();
     bar.hidden = false;
-    bar.classList.toggle("rt-done", restRemaining <= 0);
+    bar.classList.toggle("rt-done", left <= 0);
     bar.querySelector(".rt-time").textContent =
-      restRemaining > 0 ? fmtClock(restRemaining) : "Pause vorbei 💪";
+      left > 0 ? fmtClock(left) : "Pause vorbei 💪";
+  }
+  function tickRest() {
+    if (!restEndAt) return;
+    if (restSecsLeft() <= 0) {
+      if (!restDoneFired) { restDoneFired = true; restDone(); }
+      showRestBar();
+      // Balken 4 s nach Ablauf ausblenden und Timer beenden.
+      if (Date.now() - restEndAt > 4000) {
+        restEndAt = 0;
+        const b = body.querySelector("#restbar"); if (b) b.hidden = true;
+      }
+    } else showRestBar();
+  }
+  function restDone() {
+    if (navigator.vibrate) navigator.vibrate([300, 120, 300]);
+    beep();
   }
   function startRest(secs = 90) {
-    clearInterval(restInterval);
-    restRemaining = secs;
+    primeAudio();             // Audio im selben Tap freischalten (iOS-Anforderung)
+    restEndAt = Date.now() + secs * 1000;
+    restDoneFired = false;
     showRestBar();
-    restInterval = setInterval(() => {
-      restRemaining--;
-      if (restRemaining <= 0) {
-        clearInterval(restInterval);
-        restRemaining = 0;
-        showRestBar();
-        if (navigator.vibrate) navigator.vibrate(300);
-        setTimeout(() => { const b = body.querySelector("#restbar"); if (b) b.hidden = true; }, 4000);
-      } else showRestBar();
-    }, 1000);
   }
   function stopRest() {
-    clearInterval(restInterval);
-    restRemaining = 0;
+    restEndAt = 0;
+    restDoneFired = false;
     const b = body.querySelector("#restbar");
     if (b) b.hidden = true;
   }
+  // Ein einziger Sekunden-Ticker treibt den Pausen-Timer (statt pro Start neu).
+  restInterval = setInterval(tickRest, 1000);
+
+  // -- Kurzer Signalton bei Pausenende --
+  // AudioContext muss innerhalb einer Nutzer-Geste erzeugt/aktiviert werden,
+  // daher beim Abhaken (primeAudio) vorbereiten und später wiederverwenden.
+  let audioCtx = null;
+  function primeAudio() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      audioCtx = audioCtx || new Ctx();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+    } catch { /* Audio nicht verfügbar – ignorieren */ }
+  }
+  function beep() {
+    if (!audioCtx) return;
+    try {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.connect(g); g.connect(audioCtx.destination);
+      o.type = "sine"; o.frequency.value = 880;
+      const t = audioCtx.currentTime;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.3, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+      o.start(t); o.stop(t + 0.47);
+    } catch { /* ignorieren */ }
+  }
+
+  // -- Bildschirm wach halten, solange die Einheit offen ist --
+  // Hält den Pausen-Timer am Laufen, wenn das Telefon liegen bleibt.
+  let wakeLock = null;
+  async function acquireWakeLock() {
+    try {
+      if ("wakeLock" in navigator && document.visibilityState === "visible") {
+        wakeLock = await navigator.wakeLock.request("screen");
+      }
+    } catch { /* z. B. niedriger Akku – ignorieren */ }
+  }
+  function releaseWakeLock() {
+    try { wakeLock && wakeLock.release(); } catch { /* ignorieren */ }
+    wakeLock = null;
+  }
+  acquireWakeLock();
+
+  // Beim Zurückkehren in die App: Wake Lock neu anfordern (geht beim Verlassen
+  // verloren) und Anzeige sofort korrigieren statt bis zum nächsten Tick warten.
+  function onVisibility() {
+    if (document.visibilityState === "visible") {
+      acquireWakeLock();
+      refreshStats();
+      tickRest();
+    }
+  }
+  document.addEventListener("visibilitychange", onVisibility);
 
   body.addEventListener("input", (e) => {
     const inp = e.target.closest("input"); if (!inp) return;
@@ -345,7 +420,10 @@ function openSession(session, resumed = false) {
   body.addEventListener("click", (e) => {
     const t = e.target.closest("[data-act]"); if (!t) return;
     const act = t.dataset.act;
-    if (act === "rest-plus") { restRemaining += 30; showRestBar(); return; }
+    if (act === "rest-plus") {
+      const base = restSecsLeft() > 0 ? restEndAt : Date.now();
+      restEndAt = base + 30000; restDoneFired = false; showRestBar(); return;
+    }
     if (act === "rest-skip") { stopRest(); return; }
     if (act === "exprog") { openProgress(session.routineId, t.dataset.exid); return; }
     const ex = session.exercises[+t.dataset.ex];
