@@ -136,6 +136,17 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
 .w-reps { width: 52px; } .w-kg { width: 68px; }
 .times { color: var(--muted); }
 .unit { color: var(--muted); font-size: 14px; }
+.ex-note-input {
+  width: 100%; background: var(--bg2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 10px; padding: 9px 10px; font-size: 15px; font-family: inherit;
+  resize: vertical; min-height: 38px; transition: border-color 0.15s;
+}
+.ex-note-input:focus { outline: none; border-color: var(--tint); }
+.ex-note-input::placeholder { color: var(--faint); }
+.ex-note {
+  margin: -2px 16px 8px; color: var(--muted); font-size: 13px; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 .ex-head { display: flex; justify-content: space-between; align-items: baseline; padding: 18px 16px 6px; }
 .ex-head h3 { margin: 0; font-size: 18px; }
