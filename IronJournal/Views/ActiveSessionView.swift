@@ -50,8 +50,17 @@ private struct ExerciseHeader: View {
     let exercise: LoggedExercise
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(exercise.name).font(.headline).textCase(nil)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(exercise.name).font(.headline).textCase(nil)
+                Spacer()
+                if let ex = store.exercise(with: exercise.exerciseId) {
+                    let status = store.progressionStatus(for: ex)
+                    if status != .noData {
+                        ProgressionStatusPill(status: status)
+                    }
+                }
+            }
             if let last = store.lastSession(for: exercise.exerciseId) {
                 let summary = last.logged.sets
                     .filter { !$0.isWarmup }

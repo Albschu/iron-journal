@@ -70,6 +70,14 @@ export function best1RM(loggedExercise) {
   return vals.length ? Math.max(...vals) : 0;
 }
 
+/// Fortschrittssignal je Einheit: bestes e1RM – bei Körpergewicht (Gewicht 0)
+/// zählen die Wiederholungen, damit auch dort Fortschritt erkennbar ist.
+export function progressSignal(loggedExercise) {
+  const ws = workingSets(loggedExercise.sets);
+  if (!ws.length) return 0;
+  return Math.max(...ws.map((s) => (s.weight === 0 ? s.reps : epley1RM(s.weight, s.reps))));
+}
+
 /// Lineare Regression über (t, y)-Punkte → Trend/Prognose.
 /// Liefert { slope (y pro ms), intercept } oder null bei zu wenig Daten.
 export function linearTrend(points) {
@@ -171,25 +179,15 @@ export class Store {
     const idx = this.sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) this.sessions[idx] = session;
     else this.sessions.unshift(session);
-    this._applyProgression(session);
+    // Bewusst KEINE automatische Gewichtserhöhung mehr: Der Tracker prüft den
+    // Fortschritt (progressionStatus) und schlägt vor – erhöhen tut der Nutzer
+    // selbst über applySuggestedIncrease.
     this._save();
   }
 
   deleteSession(id) {
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this._save();
-  }
-
-  _applyProgression(session) {
-    if (!session.routineId) return;
-    const rt = this.routines.find((r) => r.id === session.routineId);
-    if (!rt) return;
-    for (const logged of session.exercises) {
-      const ex = rt.exercises.find((e) => e.id === logged.exerciseId);
-      if (!ex || ex.increment <= 0) continue;
-      if (!metAllTargets(logged, ex.targets)) continue;
-      for (const t of ex.targets) if (!t.isWarmup) t.weight += ex.increment;
-    }
   }
 
   // Verlauf einer Übung, chronologisch (älteste zuerst).
@@ -209,10 +207,45 @@ export class Store {
     return h.length ? h[h.length - 1] : null;
   }
 
-  hasPendingIncrease(ex) {
-    const last = this.lastSession(ex.id);
-    if (!last) return false;
-    return topTargetWeight(ex) > exerciseTopWeight(last.logged);
+  /// Prüft, ob sich der Nutzer bei einer Übung selbst steigert, und leitet
+  /// daraus einen Status mit Handlungsempfehlung ab. Erhöht NICHTS automatisch.
+  /// Liefert { kind, ... } mit kind ∈
+  /// noData | progressing | maintaining | readyToIncrease | stalled | deloadSuggested.
+  progressionStatus(ex) {
+    const entries = this.history(ex.id);
+    if (entries.length === 0) return { kind: "noData" };
+    const last = entries[entries.length - 1];
+
+    // 1) Bereit für mehr Gewicht? Ziel-Wdh in den letzten zwei Einheiten erreicht.
+    if (ex.increment > 0 && entries.length >= 2 &&
+        entries.slice(-2).every((e) => metAllTargets(e.logged, ex.targets))) {
+      const base = (ex.targets.find((t) => !t.isWarmup)?.weight) ?? exerciseTopWeight(last.logged);
+      return { kind: "readyToIncrease", suggested: base + ex.increment };
+    }
+
+    // 2) Festgefahren? Wie viele Einheiten ist der letzte Bestwert her?
+    const signals = entries.map((e) => progressSignal(e.logged));
+    let bestIdx = 0;
+    for (let i = 1; i < signals.length; i++) if (signals[i] > signals[bestIdx]) bestIdx = i;
+    const sinceBest = (entries.length - 1) - bestIdx;
+    if (sinceBest >= 5) return { kind: "deloadSuggested", sessions: sinceBest };
+    if (sinceBest >= 3) return { kind: "stalled", sessions: sinceBest };
+
+    // 3) Fortschritt gegenüber der vorletzten Einheit?
+    if (entries.length < 2) return { kind: "progressing", delta: 0 };
+    const delta = progressSignal(last.logged) - progressSignal(entries[entries.length - 2].logged);
+    return delta > 0.01 ? { kind: "progressing", delta } : { kind: "maintaining" };
+  }
+
+  /// Übernimmt den vorgeschlagenen Gewichtssprung (Arbeitssätze + Schrittweite).
+  /// Wird ausschließlich auf ausdrückliche Nutzeraktion aufgerufen.
+  applySuggestedIncrease(routineId, exerciseId) {
+    const rt = this.routines.find((r) => r.id === routineId);
+    if (!rt) return;
+    const ex = rt.exercises.find((e) => e.id === exerciseId);
+    if (!ex || ex.increment <= 0) return;
+    for (const t of ex.targets) if (!t.isWarmup) t.weight += ex.increment;
+    this._save();
   }
 
   setTargetWeight(weight, routineId, exerciseId) {

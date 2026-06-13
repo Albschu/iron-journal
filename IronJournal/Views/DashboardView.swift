@@ -50,12 +50,7 @@ private struct ExerciseDashboardRow: View {
                 }
             }
             Spacer()
-            if store.hasPendingIncrease(exercise) {
-                Label("Ziel \(Fmt.weight(exercise.topTargetWeight))", systemImage: "arrow.up.circle.fill")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.green)
-                    .labelStyle(.titleAndIcon)
-            }
+            ProgressionStatusPill(status: store.progressionStatus(for: exercise))
         }
         .padding(.vertical, 2)
     }

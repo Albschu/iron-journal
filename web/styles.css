@@ -81,6 +81,12 @@ button { font: inherit; color: inherit; }
   font-size: 12px; font-weight: 700; }
 .pill.up { background: rgba(61, 220, 151, 0.14); color: var(--green); }
 .pill.warm { background: rgba(255, 160, 87, 0.16); color: var(--orange); }
+/* Steigerungs-Status */
+.pill.prog { background: rgba(61, 220, 151, 0.14); color: var(--green); }
+.pill.hold { background: rgba(124, 140, 248, 0.16); color: #9aa6ff; }
+.pill.ready { background: rgba(139, 155, 255, 0.20); color: #aab4ff; }
+.pill.stall { background: rgba(255, 160, 87, 0.16); color: var(--orange); }
+.pill.deload { background: rgba(255, 122, 133, 0.16); color: #ff7a85; }
 
 /* Leere Zustände */
 .empty { text-align: center; color: var(--muted); padding: 56px 24px; }

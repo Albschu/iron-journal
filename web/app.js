@@ -32,6 +32,45 @@ function fmtClock(totalSecs) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// ---------- Steigerungs-Status (Tracker) ----------
+// status = { kind, ... } aus store.progressionStatus(ex).
+const STATUS_META = {
+  noData:          { label: "Keine Daten",     cls: "" },
+  progressing:     { label: "Fortschritt",     cls: "prog" },
+  maintaining:     { label: "Gehalten",        cls: "hold" },
+  readyToIncrease: { label: "Bereit für mehr", cls: "ready" },
+  stalled:         { label: "Stagniert",       cls: "stall" },
+  deloadSuggested: { label: "Deload sinnvoll", cls: "deload" },
+};
+const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, readyToIncrease: 2, maintaining: 3, progressing: 4, noData: 5 };
+
+function statusPill(st) {
+  const m = STATUS_META[st.kind];
+  if (!m || st.kind === "noData") return "";
+  return `<span class="pill ${m.cls}">${m.label}</span>`;
+}
+
+function statusDetail(st) {
+  switch (st.kind) {
+    case "noData":
+      return "Sobald du diese Übung trainierst, prüft die App, ob du dich steigerst.";
+    case "progressing":
+      return st.delta > 0.01
+        ? `Stärker als zuletzt (+${fmtWeight(st.delta)} e1RM). Weiter so 💪`
+        : "Basis erfasst – ab jetzt zählt jede Steigerung.";
+    case "maintaining":
+      return "Gehalten – kein klarer Fortschritt. Versuch nächstes Mal +1 Wiederholung.";
+    case "readyToIncrease":
+      return `Ziel-Wiederholungen zweimal erreicht. Zeit für mehr Gewicht: ${fmtWeight(st.suggested)}.`;
+    case "stalled":
+      return `Seit ${st.sessions} Einheiten kein neuer Bestwert. Variiere Wdh/Tempo oder leg einen Deload ein.`;
+    case "deloadSuggested":
+      return `Seit ${st.sessions} Einheiten festgefahren. Plane eine leichtere Woche (~50 % Volumen) und greif dann frisch an.`;
+    default:
+      return "";
+  }
+}
+
 // Inline-SVGs für leere Zustände (statt system-abhängiger Emojis)
 const ICO_DUMBBELL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 9v6M7 6.5v11M17 6.5v11M20 9v6M7 12h10"/></svg>`;
 const ICO_CLOCK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v4.5l3 2"/></svg>`;
@@ -47,6 +86,7 @@ function render() {
     t.classList.toggle("active", t.dataset.tab === activeTab));
   if (activeTab === "training") renderTraining();
   else if (activeTab === "verlauf") renderVerlauf();
+  else if (activeTab === "steigerung") renderSteigerung();
   else renderDashboard();
   screen.scrollTop = 0;
 }
@@ -129,6 +169,36 @@ function renderVerlauf() {
          <p>Starte ein Workout im Tab „Training“.</p></div>`}`;
 }
 
+// ---------- Tab: Steigerung ----------
+// Prüft je Übung, ob du dich selbst steigerst, sortiert nach Handlungsbedarf
+// (festgefahren zuerst). Die App erhöht nichts automatisch – sie zeigt nur,
+// wo es hakt und wo du bereit für mehr Gewicht bist.
+function renderSteigerung() {
+  if (store.sessions.length === 0) {
+    screen.innerHTML = `<h1 class="nav-title">Steigerung</h1>
+      <div class="empty"><div class="big">${ICO_DUMBBELL}</div><h2>Noch keine Daten</h2>
+      <p>Sobald du trainierst, prüft die App hier, ob du dich Einheit für Einheit steigerst.</p></div>`;
+    return;
+  }
+
+  const items = [];
+  for (const r of store.routines)
+    for (const ex of r.exercises)
+      items.push({ r, ex, st: store.progressionStatus(ex) });
+  items.sort((a, b) =>
+    (STATUS_PRIORITY[a.st.kind] - STATUS_PRIORITY[b.st.kind]) || a.ex.name.localeCompare(b.ex.name));
+
+  const rows = items.map(({ r, ex, st }) => `
+    <button class="row" data-action="progress" data-r="${r.id}" data-e="${ex.id}">
+      <span class="grow">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st)}</div>
+        <div class="sub2" style="color:var(--muted);margin-top:2px">${esc(statusDetail(st))}</div>
+      </span><span class="chev">›</span>
+    </button>`).join("");
+
+  screen.innerHTML = `<h1 class="nav-title">Steigerung</h1><div class="card">${rows}</div>`;
+}
+
 // ---------- Tab: Dashboard ----------
 function renderDashboard() {
   let html = `<h1 class="nav-title">Dashboard</h1>`;
@@ -166,10 +236,9 @@ function renderDashboard() {
       const sub = last
         ? `Top ${fmtWeight(exerciseTopWeight(last.logged))} · ${relDate(last.date)}`
         : `Vorgabe ${fmtWeight(topTargetWeight(ex))}`;
-      const up = store.hasPendingIncrease(ex)
-        ? `<span class="pill up">▲ ${fmtWeight(topTargetWeight(ex))}</span>` : "";
+      const pill = statusPill(store.progressionStatus(ex));
       return `<button class="row" data-action="progress" data-r="${r.id}" data-e="${ex.id}">
-        <span class="grow"><h3>${esc(ex.name)}</h3><div class="sub">${sub}</div></span>${up}
+        <span class="grow"><h3>${esc(ex.name)}</h3><div class="sub">${sub}</div></span>${pill}
         <span class="chev">›</span></button>`;
     }).join("");
     html += `</div>`;
@@ -479,7 +548,8 @@ function sessionBody(session) {
       ?.exercises.find((x) => x.id === ex.exerciseId);
     const linked = !!rtEx;
     const note = rtEx?.note?.trim();
-    return `<div class="ex-head"><h3>${esc(ex.name)}</h3>
+    const pill = rtEx ? statusPill(store.progressionStatus(rtEx)) : "";
+    return `<div class="ex-head"><h3>${esc(ex.name)}</h3>${pill}
         ${linked ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}</div>
       ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ""}
       ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}</div>` : ""}
@@ -568,11 +638,15 @@ function openProgress(routineId, exerciseId) {
           <div class="s">${workingSets(h.logged.sets).map((s) => `${s.reps}×${fmtWeightShort(s.weight)}`).join("  ")}</div>
         </div>`).join("") + `</div>`;
     }
-    const pending = store.hasPendingIncrease(ex)
-      ? `<div class="row" style="border:none;cursor:default"><span class="grow sub" style="color:var(--green)">
-         ✓ Letztes Mal alle Vorgaben erreicht 💪 — Arbeitsgewicht auf ${fmtWeight(topTargetWeight(ex))} erhöht.</span></div>` : "";
+    const st = store.progressionStatus(ex);
+    const statusBlock = `<div class="row" style="border:none;cursor:default">
+      <span class="grow">${statusPill(st)}
+        <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div>`;
+    const applyBtn = st.kind === "readyToIncrease"
+      ? `<div class="setrow"><button class="btn-text" id="apply-inc" style="color:var(--green);font-weight:700">▲ Auf ${fmtWeight(st.suggested)} erhöhen</button></div>`
+      : "";
     return `<div class="section-title">Aktuelle Vorgabe</div>
-      <div class="card">${targetsHtml}${pending}${rmHtml}
+      <div class="card">${targetsHtml}${statusBlock}${applyBtn}${rmHtml}
         <div class="setrow"><button class="btn-text" id="adjust">⚙ Arbeitsgewicht anpassen</button></div></div>
       ${charts}${table}`;
   }
@@ -580,7 +654,10 @@ function openProgress(routineId, exerciseId) {
   const exName = store.routines.find((x) => x.id === routineId)?.exercises.find((x) => x.id === exerciseId)?.name || "";
   const modal = openModal(exName, build(), { single: true });
   modal.body.addEventListener("click", (e) => {
-    if (e.target.id === "adjust") {
+    if (e.target.id === "apply-inc") {
+      store.applySuggestedIncrease(routineId, exerciseId);
+      modal.body.innerHTML = build();
+    } else if (e.target.id === "adjust") {
       const r = store.routines.find((x) => x.id === routineId);
       const ex = r.exercises.find((x) => x.id === exerciseId);
       const cur = ex.targets.find((t) => !t.isWarmup)?.weight ?? 0;
