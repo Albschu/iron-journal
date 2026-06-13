@@ -3,7 +3,7 @@
 import {
   Store, routine, exercise, setTarget,
   exerciseVolume, exerciseTopWeight, epley1RM, best1RM, progressSignal,
-  linearTrend, weeklyVolumes,
+  linearTrend, weeklyVolumes, rangeStart, trainingHeatmap, personalRecords,
 } from "./model.js";
 
 // In-Memory-Storage als localStorage-Ersatz.
@@ -242,6 +242,62 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eq(buckets.at(-2).sessions, 1, "Vorwoche: 1 Einheit");
   eq(buckets.at(-1).volume, 200, "Volumen der Woche summiert (2×100)");
   eq(buckets[0].sessions, 0, "alte Wochen leer");
+}
+
+// Zeitraum-Start (Dashboard-Filter)
+{
+  const now = new Date("2026-06-10T12:00:00");
+  eqs(rangeStart(0, now), null, "rangeStart(0) = null (alle)");
+  const s28 = rangeStart(28, now);
+  eq(s28.getHours(), 0, "rangeStart auf Mitternacht normalisiert");
+  eq(Math.round((new Date("2026-06-10T00:00:00") - s28) / 86400000), 27, "28-Tage-Fenster inkl. heute");
+}
+
+// Trainings-Heatmap
+{
+  const r = routine("Push", [exercise("Bank", [setTarget(10, 10)], 2.5)]);
+  const s = freshStore([r]);
+  const now = new Date("2026-06-10T12:00:00"); // Mittwoch
+  const mk = (daysAgo) => {
+    const ses = s.makeSession(r);
+    ses.date = new Date(now.getTime() - daysAgo * 86400000).toISOString();
+    completeAllWorking(ses);
+    return ses;
+  };
+  s.sessions = [mk(0), mk(2), mk(100)]; // heute, vorgestern, weit außerhalb
+  const hm = trainingHeatmap(s.sessions, 12, now);
+  eq(hm.grid.length, 12, "12 Wochen");
+  eq(hm.grid[0].length, 7, "7 Wochentage");
+  eq(hm.days, 2, "zwei Trainingstage im Fenster (100 Tage draußen)");
+  eq(hm.grid.at(-1)[2], 100, "heute (Mi) in der aktuellen Woche, Volumen 100");
+  eq(hm.grid.at(-1)[0], 100, "vorgestern (Mo) in der aktuellen Woche");
+  eq(hm.maxVol, 100, "Maximalvolumen je Tag");
+}
+
+// Persönliche Bestwerte
+{
+  const r = routine("Push", [
+    exercise("Bank", [setTarget(8, 20)], 2.5),
+    exercise("Liegestütze", [setTarget(25, 0)], 0),
+  ]);
+  const s = freshStore([r]);
+  const bankId = s.routines[0].exercises[0].id;
+  const logBank = (secs, reps, weight) => {
+    const ses = s.makeSession(r);
+    ses.date = new Date(secs).toISOString();
+    ses.exercises[0].sets = [{ id: "x", reps, weight, isWarmup: false, completed: true }];
+    s.saveSession(ses);
+  };
+  logBank(1000, 5, 100);          // e1RM = 116,67
+  logBank(2000, 5, 110);          // e1RM = 128,33  ← Bestwert, jüngste Einheit
+  const recs = personalRecords(s);
+  eq(recs.length, 1, "nur Übungen mit kg-Bestwert (Liegestütze 0 → keiner)");
+  eqs(recs[0].exerciseId, bankId, "Bank-Rekord erfasst");
+  eq(recs[0].top, 110, "Top-Gewicht des Bestwerts");
+  eqs(recs[0].fresh ? 1 : 0, 1, "fresh = Bestwert in jüngster Einheit");
+  // Bestwert liegt zurück → nicht mehr fresh
+  logBank(3000, 5, 90);
+  eqs(personalRecords(s)[0].fresh ? 1 : 0, 0, "nicht fresh, wenn Bestwert älter ist");
 }
 
 console.log(`\n${pass} Tests bestanden, ${fail} fehlgeschlagen`);

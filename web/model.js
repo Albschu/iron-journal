@@ -114,6 +114,61 @@ export function weeklyVolumes(sessions, weeks = 8, now = new Date()) {
   return buckets;
 }
 
+/// Startdatum (Mitternacht) für einen Zeitraum von `days` Tagen bis heute.
+/// days = 0/null → null (= „alle", kein Filter).
+export function rangeStart(days, now = new Date()) {
+  if (!days) return null;
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - days + 1);
+  return d;
+}
+
+/// Trainings-Heatmap: letzte `weeks` Kalenderwochen (Montag-basiert).
+/// grid[woche][wochentag 0=Mo…6=So] = Trainingsvolumen des Tages (0 = kein Training).
+export function trainingHeatmap(sessions, weeks = 12, now = new Date()) {
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const start = new Date(monday);
+  start.setDate(start.getDate() - (weeks - 1) * 7);
+  const grid = Array.from({ length: weeks }, () => Array(7).fill(0));
+  let maxVol = 0, days = 0;
+  for (const s of sessions) {
+    const d = new Date(s.date); d.setHours(0, 0, 0, 0);
+    const dayIdx = Math.round((d - start) / 86400000);
+    if (dayIdx < 0 || dayIdx >= weeks * 7) continue;
+    const wk = Math.floor(dayIdx / 7), wd = (d.getDay() + 6) % 7;
+    if (grid[wk][wd] === 0) days++;
+    grid[wk][wd] += sessionVolume(s);
+    if (grid[wk][wd] > maxVol) maxVol = grid[wk][wd];
+  }
+  return { grid, start, weeks, maxVol, days };
+}
+
+/// Persönliche Bestwerte (höchstes geschätztes 1RM) je Übung, beste zuerst.
+/// `fresh` = der Bestwert wurde in der jüngsten Einheit dieser Übung aufgestellt.
+export function personalRecords(store) {
+  const recs = [];
+  for (const r of store.routines) {
+    for (const ex of r.exercises) {
+      const h = store.history(ex.id);
+      if (!h.length) continue;
+      let best = 0, bestDate = null, bestTop = 0;
+      for (const e of h) {
+        const v = best1RM(e.logged);
+        if (v > best) { best = v; bestDate = e.date; bestTop = exerciseTopWeight(e.logged); }
+      }
+      if (best <= 0) continue;
+      const fresh = h.at(-1).date === bestDate;
+      recs.push({ routineId: r.id, exerciseId: ex.id, name: ex.name,
+        e1rm: best, top: bestTop, date: bestDate, fresh });
+    }
+  }
+  recs.sort((a, b) => b.e1rm - a.e1rm);
+  return recs;
+}
+
 // MARK: - Progressive Overload
 
 export function metAllTargets(loggedExercise, targets) {

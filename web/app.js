@@ -1,7 +1,8 @@
 import {
   Store, routine as mkRoutine, exercise as mkExercise, setTarget as mkTarget,
   exerciseVolume, exerciseTopWeight, sessionVolume, sessionCompletedSetCount,
-  topTargetWeight, workingSets, best1RM, linearTrend, weeklyVolumes,
+  topTargetWeight, workingSets, best1RM, linearTrend,
+  rangeStart, trainingHeatmap, personalRecords,
   fmtWeight, fmtWeightShort, fmtDate,
 } from "./model.js";
 
@@ -200,35 +201,114 @@ function renderSteigerung() {
 }
 
 // ---------- Tab: Dashboard ----------
+// Farbpalette für die Übungs-Linien im Verlaufschart (zyklisch vergeben).
+const SERIES_COLORS = ["#8b9bff", "#3ddc97", "#ffa057", "#b18cff", "#5ad1e6", "#ff7a9c", "#ffd166", "#7cf0c8"];
+const RANGES = [["4 W", 28], ["12 W", 84], ["1 J", 365], ["Alle", 0]];
+
+// Dashboard-Zustand (Zeitraum, sichtbare Übungen, Theorie-Linie) – überlebt
+// Re-Renders innerhalb der Sitzung und wird in localStorage gespiegelt.
+const DASH = loadDashState();
+function loadDashState() {
+  let saved = {};
+  try { saved = JSON.parse(window.localStorage.getItem("ironjournal.dash") || "{}"); } catch { /* egal */ }
+  return { range: saved.range ?? 84, theorie: saved.theorie ?? true, active: Array.isArray(saved.active) ? saved.active : null };
+}
+function saveDashState() {
+  try {
+    window.localStorage.setItem("ironjournal.dash",
+      JSON.stringify({ range: DASH.range, theorie: DASH.theorie, active: DASH.active }));
+  } catch { /* egal */ }
+}
+
+// Stabile, abgeflachte Übungsliste mit fester Farbe je Übung.
+function allExercises() {
+  const out = [];
+  store.routines.forEach((r) => r.exercises.forEach((ex) =>
+    out.push({ ex, routineId: r.id, color: SERIES_COLORS[out.length % SERIES_COLORS.length] })));
+  return out;
+}
+
 function renderDashboard() {
   let html = `<h1 class="nav-title">Dashboard</h1>`;
 
-  // Wochen-Überblick (Woche beginnt Montag)
-  const monday = new Date();
-  monday.setHours(0, 0, 0, 0);
-  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  const week = store.sessions.filter((s) => new Date(s.date) >= monday);
-  const weekVol = Math.round(week.reduce((n, s) => n + sessionVolume(s), 0));
-  html += `<div class="card statgrid">
-    <div class="stat"><b>${week.length}</b><span>Diese Woche</span></div>
-    <div class="stat"><b>${new Intl.NumberFormat("de-DE").format(weekVol)}</b><span>kg Volumen</span></div>
-    <div class="stat"><b>${store.sessions.length}</b><span>Einheiten</span></div>
-  </div>`;
-
-  // Wochenvolumen-Chart (letzte 8 Wochen) – antippen zeigt Details.
-  if (store.sessions.length) {
-    const buckets = weeklyVolumes(store.sessions, 8);
-    const pts = buckets.map((b) => ({
-      y: b.volume,
-      label: b.start.toLocaleDateString("de-DE", { day: "numeric", month: "numeric" }),
-      v: `${plural(b.sessions, "Einheit", "Einheiten")} · ${Math.round(b.volume)} kg`,
-    }));
-    html += `<div class="section-title">Wochenvolumen</div>${chartCard(barChart(pts))}`;
+  if (store.sessions.length === 0) {
+    html += `<div class="empty"><div class="big">${ICO_DUMBBELL}</div><h2>Noch keine Daten</h2>
+      <p>Sobald du trainierst, erscheinen hier dein Gewichtsverlauf, deine Trainingstage und neue Bestwerte.</p></div>`;
+    html += dataCardHtml();
+    screen.innerHTML = html;
+    return;
   }
 
-  if (store.sessions.length === 0)
-    html += `<div class="card" style="margin-top:12px"><div class="row" style="cursor:default"><span class="grow sub">
-      Sobald du trainierst, erscheinen hier deine Fortschritte und Steigerungs-Vorschläge.</span></div></div>`;
+  const list = allExercises();
+  // Übungen, die im gewählten Zeitraum überhaupt Verlaufsdaten haben.
+  const start = rangeStart(DASH.range);
+  const withData = list.map((item) => {
+    const hist = store.history(item.ex.id)
+      .filter((h) => (!start || new Date(h.date) >= start));
+    return { ...item, pts: hist.map((h) => ({ t: +new Date(h.date), y: exerciseTopWeight(h.logged) })).filter((p) => p.y > 0) };
+  }).filter((it) => it.pts.length);
+
+  // Standard-Auswahl: die drei meist-trainierten Übungen.
+  if (DASH.active === null) {
+    DASH.active = withData.slice()
+      .sort((a, b) => b.pts.length - a.pts.length)
+      .slice(0, 3).map((it) => it.ex.id);
+    saveDashState();
+  }
+  const activeSet = new Set(DASH.active);
+
+  // ---- Hero: Gewichtsverlauf je Übung ----
+  html += `<div class="seg" role="tablist">` +
+    RANGES.map(([label, days]) =>
+      `<button class="seg-btn ${days === DASH.range ? "on" : ""}" data-range="${days}">${label}</button>`).join("") +
+    `</div>`;
+
+  const series = withData.filter((it) => activeSet.has(it.ex.id)).map((it) => ({
+    name: it.ex.name, color: it.color, pts: it.pts, target: topTargetWeight(it.ex),
+  }));
+
+  html += `<div class="section-title">Gewicht je Übung</div>`;
+  html += `<div class="card chart-card mchart-card">`;
+  html += series.length
+    ? multiLineChart(series, { showTheorie: DASH.theorie })
+    : `<div class="chart-empty">Wähle unten eine Übung aus, um ihren Verlauf zu sehen.</div>`;
+  html += `<div class="tip" hidden></div></div>`;
+
+  // Legende: Übungen ein-/ausblenden + Theorie-Linie umschalten.
+  html += `<div class="legend">` +
+    withData.map((it) => {
+      const on = activeSet.has(it.ex.id);
+      return `<button class="lchip ${on ? "on" : ""}" data-toggle-ex="${it.ex.id}" style="--dot:${it.color}">
+        <span class="ldot"></span>${esc(it.ex.name)}</button>`;
+    }).join("") +
+    `<button class="lchip theorie ${DASH.theorie ? "on" : ""}" data-toggle-theorie="1">
+       <span class="ldash"></span>Theorie (Vorgabe)</button>` +
+    `</div>`;
+
+  // ---- Trainingstage (Heatmap) ----
+  html += `<div class="section-title">Trainingstage · letzte 12 Wochen</div>`;
+  html += `<div class="card">${heatmapHtml(trainingHeatmap(store.sessions, 12))}</div>`;
+
+  // ---- Neue Bestwerte (PRs) ----
+  const recs = personalRecords(store);
+  if (recs.length) {
+    html += `<div class="section-title">Bestwerte (geschätztes 1RM)</div><div class="card">`;
+    html += recs.slice(0, 5).map((p, i) => {
+      const item = list.find((x) => x.ex.id === p.exerciseId);
+      const color = item ? item.color : "var(--tint)";
+      const badge = p.fresh
+        ? `<span class="pr-mark fresh" style="--c:${color}">★</span>`
+        : `<span class="pr-mark" style="--c:${color}">${i + 1}</span>`;
+      return `<button class="row" data-action="progress" data-r="${p.routineId}" data-e="${p.exerciseId}">
+        ${badge}
+        <span class="grow"><h3>${esc(p.name)}</h3>
+          <div class="sub2" style="color:var(--faint)">Top ${fmtWeight(p.top)} · ${relDate(p.date)}${p.fresh ? " · neuer Rekord" : ""}</div></span>
+        <span style="font-weight:800;font-size:16px;color:${color}">${nf.format(p.e1rm)} kg</span>
+        <span class="chev">›</span></button>`;
+    }).join("") + `</div>`;
+  }
+
+  // ---- Übungen je Workout (Navigation in den Detail-Fortschritt) ----
   for (const r of store.routines) {
     html += `<div class="section-title">${esc(r.name)}</div><div class="card">`;
     html += r.exercises.map((ex) => {
@@ -243,7 +323,13 @@ function renderDashboard() {
     }).join("");
     html += `</div>`;
   }
-  html += `
+
+  html += dataCardHtml();
+  screen.innerHTML = html;
+}
+
+function dataCardHtml() {
+  return `
     <div class="section-title">Daten</div>
     <div class="card">
       <button class="row" data-action="export"><span class="grow">
@@ -253,7 +339,13 @@ function renderDashboard() {
         <h3 style="font-size:15px">⬆ Backup importieren</h3>
         <div class="sub2">Ersetzt die aktuellen Daten durch ein Backup</div></span></button>
     </div>`;
-  screen.innerHTML = html;
+}
+
+// Dashboard ohne Scroll-Sprung neu zeichnen (für Legende/Zeitraum-Umschalter).
+function rerenderDashboard() {
+  const y = screen.scrollTop;
+  renderDashboard();
+  screen.scrollTop = y;
 }
 
 // ---------- Backup ----------
@@ -288,6 +380,19 @@ function doImport() {
 
 // ---------- Aktionen (Event-Delegation) ----------
 screen.addEventListener("click", (e) => {
+  // Dashboard-Steuerung (Zeitraum / Übungen ein-/ausblenden / Theorie-Linie)
+  const rangeBtn = e.target.closest("[data-range]");
+  if (rangeBtn) { DASH.range = +rangeBtn.dataset.range; saveDashState(); rerenderDashboard(); return; }
+  const exBtn = e.target.closest("[data-toggle-ex]");
+  if (exBtn) {
+    const id = exBtn.dataset.toggleEx;
+    const set = new Set(DASH.active);
+    set.has(id) ? set.delete(id) : set.add(id);
+    DASH.active = [...set]; saveDashState(); rerenderDashboard(); return;
+  }
+  const thBtn = e.target.closest("[data-toggle-theorie]");
+  if (thBtn) { DASH.theorie = !DASH.theorie; saveDashState(); rerenderDashboard(); return; }
+
   const b = e.target.closest("[data-action]");
   if (!b) return;
   const a = b.dataset.action;
@@ -874,6 +979,111 @@ function trendSummary(points) {
   return `<div class="trend">${arrow} · Prognose in 4 Wochen: <b>≈ ${nf.format(proj)} kg</b></div>`;
 }
 
+// ---------- Mehrlinien-Chart (Dashboard: Gewicht je Übung über die Tage) ----------
+// series: [{ name, color, pts:[{t (ms), y (kg)}], target }]
+// Zeichnet je Übung eine Linie über eine gemeinsame Zeitachse; optional die
+// aktuelle Vorgabe ("Theorie") als gestrichelte Linie in der Übungsfarbe.
+// Interaktiv: Crosshair schnappt auf die Trainingstage (gemeinsame x-Spalten).
+const MPADL = 30, MPADR = 12, MPADT = 16, MPADB = 22;
+function multiLineChart(series, { showTheorie } = {}) {
+  const withPts = series.filter((s) => s.pts.length);
+  const allT = withPts.flatMap((s) => s.pts.map((p) => p.t));
+  const ys = withPts.flatMap((s) => s.pts.map((p) => p.y));
+  if (showTheorie) series.forEach((s) => { if (s.target > 0) ys.push(s.target); });
+  const tMin = Math.min(...allT), tMax = Math.max(...allT);
+  const tSpan = (tMax - tMin) || 1;
+  let max = Math.max(...ys), min = Math.min(...ys);
+  const padY = (max - min) * 0.12 || 1;
+  max += padY; min = Math.max(0, min - padY);
+  const ySpan = (max - min) || 1;
+  const X = (t) => allT.length === 1 ? (MPADL + (CW - MPADL - MPADR) / 2) : MPADL + ((t - tMin) / tSpan) * (CW - MPADL - MPADR);
+  const Y = (v) => CH - MPADB - ((v - min) / ySpan) * (CH - MPADT - MPADB);
+
+  let s = gridLines2(min, max);
+
+  // Theorie-Linien (gestrichelt) hinter den Ist-Linien.
+  if (showTheorie) {
+    for (const se of series) {
+      if (!(se.target > 0)) continue;
+      const y = Y(se.target).toFixed(1);
+      s += `<line x1="${MPADL}" y1="${y}" x2="${CW - MPADR}" y2="${y}" stroke="${se.color}" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.55"/>`;
+    }
+  }
+
+  // Ist-Linien + Punkte.
+  for (const se of withPts) {
+    const coords = se.pts.map((p) => [X(p.t), Y(p.y)]);
+    if (coords.length > 1) {
+      s += `<polyline points="${coords.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(" ")}" fill="none" stroke="${se.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    }
+    s += coords.map(([a, b], i) => `<circle cx="${a.toFixed(1)}" cy="${b.toFixed(1)}" r="${i === coords.length - 1 ? 4 : 2.6}" fill="${se.color}"/>`).join("");
+  }
+
+  // Gemeinsame x-Spalten (Trainingstage) für die Crosshair-Interaktion.
+  const tset = [...new Set(allT)].sort((a, b) => a - b);
+  const cols = tset.map((tt) => {
+    const items = [];
+    for (const se of withPts) {
+      const p = se.pts.find((q) => q.t === tt);
+      if (p) items.push({ y: +Y(p.y).toFixed(1), color: se.color, txt: `${se.name} ${fmtWeightShort(p.y)}` });
+    }
+    return { x: +X(tt).toFixed(1), label: fmtDate(new Date(tt).toISOString()), items };
+  });
+
+  const startLbl = fmtDate(new Date(tMin).toISOString());
+  const endLbl = fmtDate(new Date(tMax).toISOString());
+  const colsJson = JSON.stringify(cols).replace(/'/g, "&#39;");
+  return `<svg class="chart mchart" viewBox="0 0 ${CW} ${CH}" preserveAspectRatio="xMidYMid meet" data-w="${CW}" data-cols='${colsJson}'>
+    ${s}
+    <text x="${MPADL}" y="${CH - 6}" fill="#6b7099" font-size="10">${startLbl}</text>
+    <text x="${CW - MPADR}" y="${CH - 6}" fill="#6b7099" font-size="10" text-anchor="end">${endLbl}</text>
+    <g class="mxh" visibility="hidden"><line x1="0" x2="0" y1="${MPADT}" y2="${CH - MPADB}" stroke="#8b9bff" stroke-width="1" stroke-dasharray="2 3" opacity="0.8"/></g>
+    <g class="mdots"></g>
+  </svg>`;
+}
+
+// Achsen-Gitter für den Mehrlinien-Chart (eigene Paddings).
+function gridLines2(min, max) {
+  return [0, 0.5, 1].map((f) => {
+    const v = min + (max - min) * f;
+    const y = CH - MPADB - f * (CH - MPADT - MPADB);
+    return `<line x1="${MPADL}" y1="${y.toFixed(1)}" x2="${CW - MPADR}" y2="${y.toFixed(1)}" stroke="#2b3160" stroke-dasharray="${f ? "3 4" : "0"}"/>
+      <text x="${MPADL - 5}" y="${(y + 3.5).toFixed(1)}" fill="#6b7099" font-size="10" text-anchor="end">${nf.format(v)}</text>`;
+  }).join("");
+}
+
+// ---------- Trainings-Heatmap ----------
+function heatmapHtml({ grid, start, weeks, maxVol, days }) {
+  const cell = 13, gap = 4, gx = 22, gy = 8, rows = 7;
+  const dayLab = ["M", "D", "M", "D", "F", "S", "S"];
+  const w = gx + weeks * (cell + gap) + 4;
+  const h = gy + rows * (cell + gap) + 26;
+  let s = `<svg class="heatmap" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">`;
+  dayLab.forEach((d, r) => { if (r % 2 === 0) s += `<text x="${gx - 6}" y="${gy + r * (cell + gap) + 10}" fill="#686e99" font-size="8.5" text-anchor="end">${d}</text>`; });
+  for (let wk = 0; wk < weeks; wk++) {
+    for (let r = 0; r < rows; r++) {
+      const vol = grid[wk][r];
+      const x = gx + wk * (cell + gap), y = gy + r * (cell + gap);
+      let fill = "#262d58", op = 1;
+      if (vol > 0) { fill = "#3ddc97"; op = 0.35 + 0.65 * (maxVol ? vol / maxVol : 1); }
+      s += `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="3" fill="${fill}" opacity="${op.toFixed(2)}"/>`;
+    }
+  }
+  // Monatsmarken unter dem Gitter
+  const baseY = gy + rows * (cell + gap) + 14;
+  let lastMonth = -1;
+  for (let wk = 0; wk < weeks; wk++) {
+    const d = new Date(start); d.setDate(d.getDate() + wk * 7);
+    if (d.getMonth() !== lastMonth) {
+      lastMonth = d.getMonth();
+      s += `<text x="${gx + wk * (cell + gap)}" y="${baseY}" fill="#686e99" font-size="9">${d.toLocaleDateString("de-DE", { month: "short" })}</text>`;
+    }
+  }
+  s += `</svg>`;
+  const sub = `<div class="hm-sub">${plural(days, "Trainingstag", "Trainingstage")} in 12 Wochen</div>`;
+  return `<div class="hm-wrap">${s}${sub}</div>`;
+}
+
 // ---------- Chart-Interaktion (Tippen/Wischen → Crosshair + Tooltip) ----------
 function chartScrub(e) {
   const svg = e.target.closest && e.target.closest("svg.chart[data-pts]");
@@ -913,8 +1123,52 @@ function chartHide(e) {
   if (tip) tip.hidden = true;
 }
 
+// Crosshair + Tooltip für den Mehrlinien-Chart (zeigt alle Übungen am Trainingstag).
+function mchartScrub(e) {
+  const svg = e.target.closest && e.target.closest("svg.mchart[data-cols]");
+  if (!svg) return;
+  const cols = JSON.parse(svg.dataset.cols);
+  if (!cols.length) return;
+  const rect = svg.getBoundingClientRect();
+  const vb = ((e.clientX - rect.left) / rect.width) * +svg.dataset.w;
+  let best = 0;
+  for (let i = 1; i < cols.length; i++)
+    if (Math.abs(cols[i].x - vb) < Math.abs(cols[best].x - vb)) best = i;
+  const col = cols[best];
+
+  const xh = svg.querySelector(".mxh");
+  xh.setAttribute("visibility", "visible");
+  xh.querySelector("line").setAttribute("transform", `translate(${col.x},0)`);
+  svg.querySelector(".mdots").innerHTML = col.items
+    .map((it) => `<circle cx="${col.x}" cy="${it.y}" r="4.5" fill="none" stroke="#f4f5fa" stroke-width="2"/>`).join("");
+
+  const card = svg.closest(".chart-card");
+  const tip = card && card.querySelector(".tip");
+  if (tip) {
+    tip.hidden = false;
+    tip.classList.add("multi");
+    tip.innerHTML = `<b>${col.label}</b>` +
+      col.items.map((it) => ` · <span style="color:${it.color}">${it.txt}</span>`).join("");
+    const cardRect = card.getBoundingClientRect();
+    const cssX = rect.left - cardRect.left + (col.x / +svg.dataset.w) * rect.width;
+    tip.style.left = `${Math.min(Math.max(cssX - tip.offsetWidth / 2, 4), cardRect.width - tip.offsetWidth - 4)}px`;
+  }
+}
+function mchartHide(e) {
+  const svg = e.target.closest && e.target.closest("svg.mchart[data-cols]");
+  if (!svg) return;
+  if (e.relatedTarget && svg.contains(e.relatedTarget)) return;
+  svg.querySelector(".mxh")?.setAttribute("visibility", "hidden");
+  svg.querySelector(".mdots").innerHTML = "";
+  const tip = svg.closest(".chart-card")?.querySelector(".tip");
+  if (tip) { tip.hidden = true; tip.classList.remove("multi"); }
+}
+
 document.addEventListener("pointermove", chartScrub);
 document.addEventListener("pointerdown", chartScrub);
 document.addEventListener("pointerout", chartHide);
+document.addEventListener("pointermove", mchartScrub);
+document.addEventListener("pointerdown", mchartScrub);
+document.addEventListener("pointerout", mchartHide);
 
 render();
