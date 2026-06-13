@@ -225,6 +225,44 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
 .trend { font-size: 12.5px; color: var(--muted); margin: -4px 6px 8px; }
 .trend b { color: var(--text); }
 
+/* ===== Dashboard-Überarbeitung: Zeitraum, Verlaufschart, Legende, Heatmap, PRs ===== */
+
+/* Segmentierter Zeitraum-Umschalter (4 W / 12 W / 1 J / Alle) */
+.seg { display: flex; gap: 4px; background: var(--card); border: 1px solid rgba(255,255,255,0.045);
+  border-radius: 13px; padding: 4px; margin: 4px 0 0; }
+.seg-btn { flex: 1; border: none; background: none; color: var(--muted); cursor: pointer;
+  padding: 8px 0; border-radius: 9px; font-size: 13px; font-weight: 600; transition: all 0.15s; }
+.seg-btn.on { background: linear-gradient(135deg, var(--tint), var(--tint2)); color: #0b0e23; font-weight: 700; }
+.seg-btn:not(.on):hover { background: var(--card2); }
+
+/* Mehrlinien-Verlaufschart */
+.mchart-card { padding-top: 16px; }
+.chart-empty { padding: 40px 16px; text-align: center; color: var(--muted); font-size: 14px; }
+.tip.multi { white-space: normal; max-width: 240px; line-height: 1.5; }
+.tip.multi b { color: var(--text); }
+
+/* Legende: Übungen ein-/ausblenden */
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 2px 0; }
+.lchip { --dot: var(--tint2); display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px;
+  border-radius: 999px; border: 1px solid var(--line); background: #ffffff06; color: var(--faint);
+  cursor: pointer; font-size: 12.5px; font-weight: 600; transition: all 0.15s; }
+.lchip .ldot { width: 9px; height: 9px; border-radius: 50%; background: var(--dot); opacity: 0.4; flex: none; }
+.lchip .ldash { width: 14px; height: 0; border-top: 2px dashed var(--tint2); opacity: 0.5; flex: none; }
+.lchip.on { color: var(--text); background: #ffffff10; border-color: var(--dot); }
+.lchip.on .ldot, .lchip.on .ldash { opacity: 1; }
+.lchip:hover { background: var(--card2); }
+
+/* Trainings-Heatmap */
+.hm-wrap { padding: 14px 14px 10px; }
+.heatmap { width: 100%; height: auto; display: block; }
+.hm-sub { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+/* Bestwerte (PR) – Rang-/Stern-Markierung links */
+.pr-mark { width: 28px; height: 28px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  font-size: 13px; font-weight: 800; color: var(--c); background: var(--bg2);
+  border: 1.5px solid var(--c); }
+.pr-mark.fresh { font-size: 15px; }
+
 /* Quicklink Übungs-Fortschritt aus der Einheit */
 .mini-link { background: none; border: none; font-size: 17px; cursor: pointer;
   padding: 2px 4px; opacity: 0.85; }

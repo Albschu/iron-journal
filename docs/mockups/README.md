@@ -11,3 +11,12 @@ Mockups (Beispieldaten, Übungsnamen aus den Seed-Workouts) – noch nicht im Co
 | **C – Pro-Analyse** | `concept-c-analytics.png` | Datendichte „Analyse"-Ansicht: Metrik-Umschalter (Gewicht / Volumen / 1RM), großer Multi-Linien-Chart, **Trainings-Heatmap** der letzten 10 Wochen und Liste neuer Bestwerte (PRs). |
 
 Neu erzeugen: `node docs/mockups/generate.mjs` (benötigt `@resvg/resvg-js`).
+
+## Umgesetzt (Web-App)
+
+Gewählt wurde ein **Mix**: der Multi-Übungs-Verlaufschart aus **Konzept A**
+(oben, mit Zeitraum-Umschalter, ein-/ausblendbarer Legende und gestrichelter
+„Theorie"-Linie) plus **Trainings-Heatmap** und **Bestwerte-Liste** aus
+**Konzept C**. Die alten Wochen-Statistik-Kacheln und das Wochenvolumen-Balken­
+diagramm wurden ersetzt; Backup-Export/-Import bleibt. Umgesetzt in
+`web/app.js`, `web/model.js` und `web/styles.css`.
