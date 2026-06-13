@@ -19,6 +19,8 @@ struct ExerciseProgressView: View {
             .exercises.first(where: { $0.id == exercise.id }) ?? exercise
     }
 
+    private var status: ProgressionStatus { store.progressionStatus(for: current) }
+
     var body: some View {
         List {
             // Aktuelle Vorgabe + Progressive Overload
@@ -34,12 +36,22 @@ struct ExerciseProgressView: View {
                     }
                 }
 
-                if store.hasPendingIncrease(current) {
-                    HStack {
-                        Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-                        Text("Letztes Mal alle Vorgaben erreicht 💪 — Arbeitsgewicht automatisch auf \(Fmt.weight(current.topTargetWeight)) erhöht.")
-                            .font(.caption)
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressionStatusPill(status: status)
+                    Text(status.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+
+                if case .readyToIncrease(let suggested) = status {
+                    Button {
+                        store.applySuggestedIncrease(routineId: routine.id, exerciseId: exercise.id)
+                    } label: {
+                        Label("Auf \(Fmt.weight(suggested)) erhöhen", systemImage: "arrow.up.circle.fill")
+                            .fontWeight(.semibold)
                     }
+                    .foregroundStyle(.green)
                 }
 
                 Button {

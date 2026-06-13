@@ -21,6 +21,9 @@ struct RootView: View {
             HistoryView()
                 .tabItem { Label("Verlauf", systemImage: "clock.arrow.circlepath") }
 
+            ImprovementView()
+                .tabItem { Label("Steigerung", systemImage: "figure.strengthtraining.traditional") }
+
             DashboardView()
                 .tabItem { Label("Dashboard", systemImage: "chart.line.uptrend.xyaxis") }
         }

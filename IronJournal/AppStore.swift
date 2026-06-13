@@ -37,6 +37,11 @@ final class AppStore: ObservableObject {
         history(for: exerciseId).last
     }
 
+    /// Findet eine Übungs-Vorlage anhand ihrer ID über alle Routinen.
+    func exercise(with id: UUID) -> Exercise? {
+        routines.flatMap(\.exercises).first { $0.id == id }
+    }
+
     // MARK: - Eine Einheit starten
 
     /// Erzeugt eine neue Session aus einer Routine. Die Sätze werden mit den
@@ -57,19 +62,20 @@ final class AppStore: ObservableObject {
         } else {
             sessions.insert(session, at: 0)
         }
-        // Progressive Overload: Vorgaben nach einer erfolgreichen Einheit erhöhen.
-        applyProgression(from: session)
+        // Bewusst KEINE automatische Gewichtserhöhung mehr: Die App prüft den
+        // Fortschritt (siehe `progressionStatus`) und schlägt vor – erhöhen tut
+        // der Nutzer selbst per `applySuggestedIncrease`.
     }
 
     func deleteSession(_ session: Session) {
         sessions.removeAll { $0.id == session.id }
     }
 
-    // MARK: - Progressive Overload
+    // MARK: - Progressive-Overload-Tracker
 
     /// Wurden in der geloggten Übung alle Arbeitssätze mit Ziel-Wdh UND
     /// mindestens dem Ziel-Gewicht abgehakt?
-    private func metAllTargets(_ logged: LoggedExercise, targets: [SetTarget]) -> Bool {
+    private func hitAllTargets(_ logged: LoggedExercise, targets: [SetTarget]) -> Bool {
         let workingTargets = targets.filter { !$0.isWarmup }
         let workingSets = logged.sets.filter { !$0.isWarmup }
         guard !workingTargets.isEmpty, workingSets.count >= workingTargets.count else { return false }
@@ -82,29 +88,53 @@ final class AppStore: ObservableObject {
         return true
     }
 
-    /// Schreibt nach einer erfolgreichen Einheit die Vorgaben der Routine fort
-    /// (Arbeitssätze + Schrittweite). Aufwärmsätze bleiben unverändert.
-    private func applyProgression(from session: Session) {
-        guard let routineId = session.routineId,
-              let rIdx = routines.firstIndex(where: { $0.id == routineId }) else { return }
-        for logged in session.exercises {
-            guard let eIdx = routines[rIdx].exercises.firstIndex(where: { $0.id == logged.exerciseId })
-            else { continue }
-            let exercise = routines[rIdx].exercises[eIdx]
-            guard exercise.increment > 0, metAllTargets(logged, targets: exercise.targets) else { continue }
-            routines[rIdx].exercises[eIdx].targets = exercise.targets.map { target in
-                var t = target
-                if !t.isWarmup { t.weight += exercise.increment }
-                return t
-            }
-        }
+    /// Index der (frühesten) Einheit mit dem höchsten e1RM. Gleichstände zählen
+    /// NICHT als neuer Bestwert – nur ein echtes Übertreffen verschiebt den Index.
+    private func bestE1RMIndex(_ values: [Double]) -> Int {
+        guard !values.isEmpty else { return 0 }
+        var best = 0
+        for i in values.indices where values[i] > values[best] { best = i }
+        return best
     }
 
-    /// True, wenn die Vorgabe seit der letzten Einheit erhöht wurde – also beim
-    /// nächsten Mal mehr Gewicht ansteht. Treibt den Steigerungs-Indikator.
-    func hasPendingIncrease(_ exercise: Exercise) -> Bool {
-        guard let last = lastSession(for: exercise.id) else { return false }
-        return exercise.topTargetWeight > last.topWeight
+    /// Prüft, ob sich der Nutzer bei einer Übung selbst steigert, und leitet
+    /// daraus einen Status mit Handlungsempfehlung ab. Erhöht NICHTS automatisch.
+    func progressionStatus(for exercise: Exercise) -> ProgressionStatus {
+        let entries = history(for: exercise.id)
+        guard let last = entries.last else { return .noData }
+
+        // 1) Bereit für mehr Gewicht? Ziel-Wdh in den letzten zwei Einheiten erreicht.
+        if exercise.increment > 0, entries.count >= 2,
+           entries.suffix(2).allSatisfy({ hitAllTargets($0.logged, targets: exercise.targets) }) {
+            let base = exercise.targets.first(where: { !$0.isWarmup })?.weight ?? last.topWeight
+            return .readyToIncrease(suggested: base + exercise.increment)
+        }
+
+        // 2) Festgefahren? Wie viele Einheiten ist der letzte Bestwert her?
+        let e1rms = entries.map(\.e1RM)
+        let sinceBest = (entries.count - 1) - bestE1RMIndex(e1rms)
+        if sinceBest >= 5 { return .deloadSuggested(sessions: sinceBest) }
+        if sinceBest >= 3 { return .stalled(sessions: sinceBest) }
+
+        // 3) Fortschritt gegenüber der vorletzten Einheit?
+        guard entries.count >= 2 else { return .progressing(delta: 0) }
+        let delta = last.e1RM - entries[entries.count - 2].e1RM
+        return delta > 0.01 ? .progressing(delta: delta) : .maintaining
+    }
+
+    /// Übernimmt den vorgeschlagenen Gewichtssprung (Arbeitssätze + Schrittweite).
+    /// Wird ausschließlich auf ausdrückliche Nutzeraktion aufgerufen.
+    func applySuggestedIncrease(routineId: UUID, exerciseId: UUID) {
+        guard let rIdx = routines.firstIndex(where: { $0.id == routineId }),
+              let eIdx = routines[rIdx].exercises.firstIndex(where: { $0.id == exerciseId })
+        else { return }
+        let inc = routines[rIdx].exercises[eIdx].increment
+        guard inc > 0 else { return }
+        routines[rIdx].exercises[eIdx].targets = routines[rIdx].exercises[eIdx].targets.map { target in
+            var t = target
+            if !t.isWarmup { t.weight += inc }
+            return t
+        }
     }
 
     /// Setzt das Gewicht aller Arbeitssätze einer Übung manuell.

@@ -42,6 +42,15 @@ struct LoggedSet: Identifiable, Codable, Hashable {
     var weight: Double
     var isWarmup: Bool = false
     var completed: Bool = false
+
+    /// Geschätztes 1RM (Epley: Gewicht × (1 + Wdh/30)) – ein einzelnes
+    /// Fortschrittssignal, das steigt, egal ob man Gewicht ODER Wdh erhöht.
+    /// Für Körpergewicht (Gewicht 0) zählen die Wiederholungen selbst.
+    var estimatedOneRepMax: Double {
+        guard reps > 0 else { return 0 }
+        if weight == 0 { return Double(reps) }
+        return weight * (1 + Double(reps) / 30)
+    }
 }
 
 /// Eine Übung innerhalb einer geloggten Einheit.
@@ -59,6 +68,11 @@ struct LoggedExercise: Identifiable, Codable, Hashable {
     /// Schwerstes bewegtes Gewicht (Top-Set) der Arbeitssätze.
     var topWeight: Double {
         sets.filter { !$0.isWarmup }.map(\.weight).max() ?? 0
+    }
+
+    /// Bestes geschätztes 1RM über die Arbeitssätze – Fortschrittssignal je Einheit.
+    var bestE1RM: Double {
+        sets.filter { !$0.isWarmup }.map(\.estimatedOneRepMax).max() ?? 0
     }
 
     /// Wurden alle (geplanten, abgehakten) Arbeitssätze erledigt?
@@ -88,4 +102,62 @@ struct ExerciseHistoryEntry: Identifiable, Hashable {
 
     var topWeight: Double { logged.topWeight }
     var volume: Double { logged.volume }
+    var e1RM: Double { logged.bestE1RM }
+}
+
+// MARK: - Steigerungs-Status (Tracker)
+
+/// Bewertung, ob bei einer Übung Progressive Overload stattfindet.
+/// Die App *prüft* nur und schlägt vor – sie erhöht das Gewicht nie selbst.
+enum ProgressionStatus: Equatable {
+    case noData                              // noch nicht trainiert
+    case progressing(delta: Double)          // e1RM gegenüber letzter Einheit gestiegen
+    case maintaining                         // gehalten, kein klarer Fortschritt
+    case readyToIncrease(suggested: Double)  // Ziel-Wdh zweimal erreicht → Gewicht erhöhen
+    case stalled(sessions: Int)              // ≥3 Einheiten ohne neuen Bestwert
+    case deloadSuggested(sessions: Int)      // länger festgefahren → Deload
+
+    /// Kurzbezeichnung für die Status-Pille.
+    var label: String {
+        switch self {
+        case .noData:          return "Noch keine Daten"
+        case .progressing:     return "Fortschritt"
+        case .maintaining:     return "Gehalten"
+        case .readyToIncrease: return "Bereit für mehr"
+        case .stalled:         return "Stagniert"
+        case .deloadSuggested: return "Deload sinnvoll"
+        }
+    }
+
+    /// Ausführliche, motivierende Erklärung mit Handlungsempfehlung.
+    var detail: String {
+        switch self {
+        case .noData:
+            return "Sobald du diese Übung trainierst, prüft die App, ob du dich steigerst."
+        case .progressing(let delta):
+            return delta > 0.01
+                ? "Stärker als zuletzt (+\(Fmt.weight(delta)) e1RM). Weiter so 💪"
+                : "Basis erfasst – ab jetzt zählt jede Steigerung."
+        case .maintaining:
+            return "Gehalten – kein klarer Fortschritt. Versuch nächstes Mal +1 Wiederholung."
+        case .readyToIncrease(let suggested):
+            return "Ziel-Wiederholungen zweimal erreicht. Zeit für mehr Gewicht: \(Fmt.weight(suggested))."
+        case .stalled(let n):
+            return "Seit \(n) Einheiten kein neuer Bestwert. Variiere Wdh/Tempo oder leg einen Deload ein."
+        case .deloadSuggested(let n):
+            return "Seit \(n) Einheiten festgefahren. Plane eine leichtere Woche (~50 % Volumen) und greif dann frisch an."
+        }
+    }
+
+    /// Sortier-Priorität für die Verbesserungs-Liste (kleiner = mehr Aufmerksamkeit).
+    var sortPriority: Int {
+        switch self {
+        case .deloadSuggested: return 0
+        case .stalled:         return 1
+        case .readyToIncrease: return 2
+        case .maintaining:     return 3
+        case .progressing:     return 4
+        case .noData:          return 5
+        }
+    }
 }

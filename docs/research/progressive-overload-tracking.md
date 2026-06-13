@@ -76,21 +76,22 @@ Notes:
   normal day-to-day variation doesn't trigger false alarms.
 - "No progress" should be judged on e1RM/volume, not raw weight, so rep PRs count.
 
-## 4. The "checker, not auto-adder" change
+## 4. The "checker, not auto-adder" change  ✅ implemented
 
-This is the core of your request. Concretely:
+This is the core of your request, and it is what shipped:
 
-- **Stop mutating targets automatically.** Replace the auto-increment in
-  `applyProgression` with a **suggestion** that you *accept or dismiss*. The app
-  detects "you earned a weight bump" and shows the 🔵 *Ready to add weight* badge
-  + a one-tap "Apply +2.5 kg" button — but the weight only changes if **you**
-  tap it.
-- **Add a feature flag** (e.g. `autoProgression: Bool` per exercise, default
-  `false`) so the old behaviour stays available for anyone who wants it. Your
-  preference becomes the default: the app *checks*, you *decide*.
-- The existing `hasPendingIncrease(_:)` already computes a related signal; it
-  would be repurposed/renamed to drive the *suggestion*, not reflect an
-  already-applied auto-bump.
+- **Auto-increment removed.** `AppStore.applyProgression` (and the web
+  `Store._applyProgression`) no longer run on save — saving a session never
+  changes your target weights.
+- **Suggestion instead.** When you hit the target reps on all working sets for
+  the last two sessions, the exercise reports the 🔵 *Ready to add weight*
+  status with a one-tap **"Auf X kg erhöhen"** button (`applySuggestedIncrease`).
+  The weight only changes when **you** tap it.
+- **Full replacement, no flag.** Per the product decision, auto-add was removed
+  outright rather than kept behind an opt-in toggle, so the behaviour is
+  consistent everywhere: the app *checks*, you *decide*.
+- The old `hasPendingIncrease(_:)` helper was removed; the richer
+  `progressionStatus(for:)` drives all the badges and suggestions instead.
 
 ## 5. Mapping to Iron Journal's models
 
