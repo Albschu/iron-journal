@@ -34,6 +34,10 @@ struct ProgressionStatusPill: View {
         Label(status.label, systemImage: status.symbolName)
             .font(.caption2.weight(.semibold))
             .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+            // Nie umbrechen oder abschneiden – stattdessen soll der
+            // Übungsname daneben umbrechen.
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(status.tint.opacity(0.15), in: Capsule())
