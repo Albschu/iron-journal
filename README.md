@@ -4,7 +4,7 @@ Minimalistische iOS-App (SwiftUI) zum Tracking von Krafttraining – als Ersatz 
 
 ## Funktionen
 
-- **Training** – Vordefinierte Workouts (Push, Rücken, Zuhause). Antippen startet eine Einheit; Sätze sind mit den letzten Vorgaben vorbefüllt. Wdh & Gewicht eintragen, Satz abhaken, fertig.
+- **Training** – Vordefinierte Workouts (Push, Rücken, Zuhause). Antippen startet eine Einheit; Sätze sind mit der letzten Einheit vorbefüllt (Ist-Werte statt statischer Vorgaben) – einfach öffnen und loslegen, ohne nachzudenken. Wdh & Gewicht eintragen, Satz abhaken, fertig.
 - **Verlauf** – Jede abgeschlossene Einheit mit Datum, Volumen und allen Sätzen.
 - **Dashboard** – Pro Übung Top-Gewicht- und Volumen-Charts über die Zeit, tabellarischer Verlauf und Steigerungs-Status.
 - **Progressive Overload** – Wenn in der letzten Einheit alle Arbeitssätze mit den Ziel-Wiederholungen abgehakt waren, wird das Arbeitsgewicht beim nächsten Start automatisch um die eingestellte Schrittweite erhöht (pro Übung konfigurierbar, z. B. 2,5 kg an der Hantel, 1,25 kg am Block). Gewichte lassen sich jederzeit auch manuell anpassen.

@@ -182,6 +182,17 @@ export function metAllTargets(loggedExercise, targets) {
   return true;
 }
 
+/// Wurden alle Arbeitssätze abgehakt und die Ziel-Wiederholungen der Vorgaben
+/// erreicht? Das Gewicht ist bewusst egal – so greift die automatische
+/// Steigerung auch nach einem Deload wieder. Zusätzliche Sätze über die
+/// Vorgaben hinaus müssen das letzte Wdh-Ziel erfüllen.
+export function hitRepGoals(loggedExercise, targets) {
+  const goals = targets.filter((t) => !t.isWarmup);
+  const ws = workingSets(loggedExercise.sets);
+  if (goals.length === 0 || ws.length < goals.length) return false;
+  return ws.every((s, i) => s.completed && s.reps >= goals[Math.min(i, goals.length - 1)].reps);
+}
+
 // MARK: - Store
 
 export class Store {
@@ -208,7 +219,9 @@ export class Store {
     this.storage.setItem(STORAGE_KEYS.sessions, JSON.stringify(this.sessions));
   }
 
-  // Eine neue Einheit aus einer Routine, mit aktuellen Vorgaben vorbefüllt.
+  // Eine neue Einheit aus einer Routine: vorbefüllt mit den zuletzt
+  // tatsächlich ausgeführten Sätzen (Fallback: Vorgaben) – bei erreichtem
+  // Wiederholungsziel automatisch um die Schrittweite erhöht.
   makeSession(rt) {
     return {
       id: uid(),
@@ -219,15 +232,35 @@ export class Store {
         id: uid(),
         exerciseId: ex.id,
         name: ex.name,
-        sets: ex.targets.map((t) => ({
-          id: uid(),
-          reps: t.reps,
-          weight: t.weight,
-          isWarmup: t.isWarmup,
-          completed: false,
-        })),
+        sets: this._prefillSets(ex),
       })),
     };
+  }
+
+  /// Automatische Steigerung für die Vorbefüllung: die Schrittweite der
+  /// Übung, wenn beim letzten Mal alle Arbeitssätze mit den
+  /// Ziel-Wiederholungen abgehakt wurden – sonst 0.
+  autoIncrement(ex) {
+    if (!ex || ex.increment <= 0) return 0;
+    const last = this.lastSession(ex.id);
+    return last && hitRepGoals(last.logged, ex.targets) ? ex.increment : 0;
+  }
+
+  _prefillSets(ex) {
+    const last = this.lastSession(ex.id);
+    if (!last) {
+      return ex.targets.map((t) => ({
+        id: uid(), reps: t.reps, weight: t.weight, isWarmup: t.isWarmup, completed: false,
+      }));
+    }
+    const inc = this.autoIncrement(ex);
+    return last.logged.sets.map((s) => ({
+      id: uid(),
+      reps: s.reps,
+      weight: s.isWarmup ? s.weight : s.weight + inc,
+      isWarmup: s.isWarmup,
+      completed: false,
+    }));
   }
 
   saveSession(session) {

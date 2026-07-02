@@ -3,10 +3,12 @@ import XCTest
 
 /// Tests des Progressive-Overload-**Trackers**: geschätztes 1RM (Epley),
 /// die Statuslogik (`progressionStatus`), das *manuelle* Übernehmen eines
-/// Vorschlags (`applySuggestedIncrease`) sowie `setTargetWeight`.
+/// Vorschlags (`applySuggestedIncrease`), `setTargetWeight` sowie die
+/// automatische **Vorbefüllung** neuer Einheiten (`makeSession`): letzte
+/// Ist-Sätze, bei erreichtem Wiederholungsziel +Schrittweite.
 ///
-/// Wichtig: Seit der Umstellung erhöht `save(session:)` das Gewicht NICHT mehr
-/// automatisch – die App prüft nur und schlägt vor.
+/// Wichtig: `save(session:)` verändert die Vorgaben (targets) NICHT –
+/// automatisch erhöht wird nur die Vorbefüllung der nächsten Einheit.
 ///
 /// Hinweis: `AppStore` persistiert in den Documents-Ordner (Test-Sandbox).
 /// Jeder Test überschreibt `routines`/`sessions` direkt nach der Initialisierung
@@ -77,6 +79,95 @@ final class ProgressionTests: XCTestCase {
 
     func testZeroRepsHasNoEstimate() {
         XCTAssertEqual(LoggedSet(reps: 0, weight: 100).estimatedOneRepMax, 0, accuracy: 0.0001)
+    }
+
+    // MARK: - Vorbefüllung der nächsten Einheit (Auto-Steigerung)
+
+    func testPrefillUsesTargetsWithoutHistory() {
+        let routine = singleExerciseRoutine(targets: [
+            SetTarget(reps: 8, weight: 15, isWarmup: true),
+            SetTarget(reps: 8, weight: 20),
+        ])
+        let store = makeStore([routine])
+
+        let session = store.makeSession(from: routine)
+
+        XCTAssertEqual(session.exercises[0].sets.count, 2)
+        XCTAssertEqual(session.exercises[0].sets[1].weight, 20, accuracy: 0.0001)
+    }
+
+    func testPrefillAutoIncrementsAfterHittingRepGoals() {
+        let routine = singleExerciseRoutine(targets: [
+            SetTarget(reps: 8, weight: 15, isWarmup: true),
+            SetTarget(reps: 8, weight: 20),
+        ], increment: 2.5)
+        let store = makeStore([routine])
+
+        var session = store.makeSession(from: routine)
+        session.exercises[0].sets[1].completed = true // Aufwärmen zählt nicht
+        store.save(session: session)
+
+        let next = store.makeSession(from: routine)
+        XCTAssertEqual(next.exercises[0].sets[0].weight, 15, accuracy: 0.0001,
+                       "Aufwärmsatz bleibt bei Auto-Steigerung unverändert.")
+        XCTAssertEqual(next.exercises[0].sets[1].weight, 22.5, accuracy: 0.0001,
+                       "Arbeitssatz wird automatisch um increment erhöht vorbefüllt.")
+        XCTAssertFalse(next.exercises[0].sets[1].completed, "Vorbefüllte Sätze sind nicht abgehakt.")
+        XCTAssertEqual(store.autoIncrement(for: exercise(store)), 2.5, accuracy: 0.0001,
+                       "autoIncrement liefert die Schrittweite für den Hinweis.")
+    }
+
+    func testPrefillNoIncrementWhenSetNotCompleted() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(8, 20, false)])
+
+        let next = store.makeSession(from: routine)
+        XCTAssertEqual(next.exercises[0].sets[0].weight, 20, accuracy: 0.0001)
+        XCTAssertEqual(store.autoIncrement(for: exercise(store)), 0, accuracy: 0.0001)
+    }
+
+    func testPrefillNoIncrementWhenRepsBelowGoal() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(6, 20, true)])
+
+        let next = store.makeSession(from: routine)
+        XCTAssertEqual(next.exercises[0].sets[0].weight, 20, accuracy: 0.0001)
+    }
+
+    func testPrefillUsesLastActualSetsIncludingExtraSet() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        // Letztes Mal schwerer als die Vorgabe und ein Satz mehr.
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000,
+                   sets: [(8, 25, true), (10, 25, true)])
+
+        let next = store.makeSession(from: routine)
+        XCTAssertEqual(next.exercises[0].sets.count, 2, "Extra-Satz vom letzten Mal wird übernommen.")
+        XCTAssertEqual(next.exercises[0].sets[0].weight, 27.5, accuracy: 0.0001,
+                       "Steigerung basiert auf dem letzten Ist-Gewicht.")
+        XCTAssertEqual(next.exercises[0].sets[1].reps, 10, "Wdh vom letzten Mal übernommen.")
+    }
+
+    func testPrefillAutoIncrementsAfterDeloadBelowTargetWeight() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(8, 15, true)])
+
+        let next = store.makeSession(from: routine)
+        XCTAssertEqual(next.exercises[0].sets[0].weight, 17.5, accuracy: 0.0001,
+                       "Nach einem Deload greift die Steigerung wieder (Gewicht egal, Wdh zählen).")
+    }
+
+    func testPrefillNoIncrementForBodyweight() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 25, weight: 0)], increment: 0)
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(30, 0, true)])
+
+        let next = store.makeSession(from: routine)
+        XCTAssertEqual(next.exercises[0].sets[0].weight, 0, accuracy: 0.0001)
+        XCTAssertEqual(next.exercises[0].sets[0].reps, 30, "Letzte Wdh werden vorbefüllt.")
     }
 
     // MARK: - Statuslogik

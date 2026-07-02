@@ -654,10 +654,13 @@ function sessionBody(session) {
     const linked = !!rtEx;
     const note = rtEx?.note?.trim();
     const pill = rtEx ? statusPill(store.progressionStatus(rtEx)) : "";
+    const inc = rtEx ? store.autoIncrement(rtEx) : 0;
+    const incTxt = inc > 0
+      ? ` <span class="auto-up">↑ automatisch +${fmtWeightShort(inc)} kg</span>` : "";
     return `<div class="ex-head"><h3>${esc(ex.name)}</h3>${pill}
         ${linked ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}</div>
       ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ""}
-      ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}</div>` : ""}
+      ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}${incTxt}</div>` : ""}
       <div class="modal-grp" style="margin-top:4px">${sets}
         <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button></div>
       </div>`;

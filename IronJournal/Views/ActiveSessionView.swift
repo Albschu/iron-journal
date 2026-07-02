@@ -66,10 +66,19 @@ private struct ExerciseHeader: View {
                     .filter { !$0.isWarmup }
                     .map { "\($0.reps)×\(Fmt.weightShort($0.weight))" }
                     .joined(separator: "  ")
-                Text("Zuletzt: \(summary)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textCase(nil)
+                let inc = store.exercise(with: exercise.exerciseId)
+                    .map { store.autoIncrement(for: $0) } ?? 0
+                HStack(spacing: 8) {
+                    Text("Zuletzt: \(summary)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if inc > 0 {
+                        Text("↑ automatisch +\(Fmt.weightShort(inc)) kg")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.green)
+                    }
+                }
+                .textCase(nil)
             }
         }
     }

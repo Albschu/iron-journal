@@ -83,6 +83,71 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eq(w(s), 0, "applySuggestedIncrease No-Op bei increment 0");
 }
 
+// ---------- Vorbefüllung der nächsten Einheit (Auto-Steigerung) ----------
+// P1: ohne Verlauf → Vorgaben
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15, true), setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  const ses = s.makeSession(r);
+  eq(ses.exercises[0].sets.length, 2, "Vorbefüllung ohne Verlauf: Satzanzahl aus Vorgaben");
+  eq(ses.exercises[0].sets[1].weight, 20, "Vorbefüllung ohne Verlauf: Gewicht aus Vorgaben");
+}
+// P2: Ziel-Wdh erreicht + abgehakt → Arbeitssatz +increment, Aufwärmsatz bleibt
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15, true), setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  const ses = s.makeSession(r);
+  ses.exercises[0].sets[1].completed = true; // Aufwärmen muss nicht abgehakt sein
+  s.saveSession(ses);
+  const next = s.makeSession(r);
+  eq(next.exercises[0].sets[0].weight, 15, "Aufwärmsatz bleibt bei Auto-Steigerung unverändert");
+  eq(next.exercises[0].sets[1].weight, 22.5, "Arbeitssatz automatisch +increment vorbefüllt");
+  eqs(next.exercises[0].sets[1].completed, false, "vorbefüllte Sätze sind nicht abgehakt");
+  eq(s.autoIncrement(ex0(s)), 2.5, "autoIncrement liefert die Schrittweite für den Hinweis");
+}
+// P3: Satz nicht abgehakt → keine Steigerung, Vorbefüllung = letzte Werte
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[8, 20, false]]);
+  const next = s.makeSession(r);
+  eq(next.exercises[0].sets[0].weight, 20, "nicht abgehakt → Gewicht bleibt");
+  eq(s.autoIncrement(ex0(s)), 0, "nicht abgehakt → autoIncrement 0");
+}
+// P4: Wdh unter Ziel → keine Steigerung
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[6, 20, true]]);
+  eq(s.makeSession(r).exercises[0].sets[0].weight, 20, "Wdh unter Ziel → Gewicht bleibt");
+}
+// P5: Vorbefüllung nutzt die letzten TATSÄCHLICHEN Sätze (inkl. Extra-Satz)
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[8, 25, true], [10, 25, true]]); // schwerer + ein Satz mehr
+  const next = s.makeSession(r);
+  eq(next.exercises[0].sets.length, 2, "Extra-Satz vom letzten Mal wird übernommen");
+  eq(next.exercises[0].sets[0].weight, 27.5, "Steigerung basiert auf letztem Ist-Gewicht");
+  eq(next.exercises[0].sets[1].reps, 10, "Wdh vom letzten Mal übernommen");
+}
+// P6: Deload unter Ziel-Gewicht – Wdh-Ziel erreicht → trotzdem Steigerung
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[8, 15, true]]);
+  eq(s.makeSession(r).exercises[0].sets[0].weight, 17.5, "nach Deload greift die Steigerung wieder");
+}
+// P7: Körpergewicht (increment 0) → nie automatische Steigerung
+{
+  const r = routine("Zuhause", [exercise("Liegestütze", [setTarget(25, 0)], 0)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[30, 0, true]]);
+  const next = s.makeSession(r);
+  eq(next.exercises[0].sets[0].weight, 0, "Körpergewicht bleibt 0");
+  eq(next.exercises[0].sets[0].reps, 30, "letzte Wdh vorbefüllt");
+}
+
 // ---------- Statuslogik ----------
 // 5: noData
 {
