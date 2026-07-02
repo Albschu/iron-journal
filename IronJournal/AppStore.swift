@@ -45,15 +45,41 @@ final class AppStore: ObservableObject {
     // MARK: - Eine Einheit starten
 
     /// Erzeugt eine neue Session aus einer Routine. Die Sätze werden mit den
-    /// aktuellen (ggf. bereits fortgeschriebenen) Vorgaben vorbefüllt.
+    /// zuletzt tatsächlich ausgeführten Sätzen vorbefüllt (Fallback: Vorgaben)
+    /// und bei erreichtem Wiederholungsziel automatisch um die Schrittweite
+    /// erhöht – einfach öffnen und loslegen, ohne nachzudenken.
     func makeSession(from routine: Routine) -> Session {
         let logged = routine.exercises.map { exercise in
-            let sets = exercise.targets.map {
-                LoggedSet(reps: $0.reps, weight: $0.weight, isWarmup: $0.isWarmup, completed: false)
-            }
-            return LoggedExercise(exerciseId: exercise.id, name: exercise.name, sets: sets)
+            LoggedExercise(exerciseId: exercise.id, name: exercise.name,
+                           sets: prefillSets(for: exercise))
         }
         return Session(routineId: routine.id, routineName: routine.name, exercises: logged)
+    }
+
+    /// Automatische Steigerung für die Vorbefüllung: die Schrittweite der
+    /// Übung, wenn beim letzten Mal alle Arbeitssätze mit den
+    /// Ziel-Wiederholungen abgehakt wurden – sonst 0.
+    func autoIncrement(for exercise: Exercise) -> Double {
+        guard exercise.increment > 0,
+              let last = lastSession(for: exercise.id),
+              hitRepGoals(last.logged, targets: exercise.targets)
+        else { return 0 }
+        return exercise.increment
+    }
+
+    private func prefillSets(for exercise: Exercise) -> [LoggedSet] {
+        guard let last = lastSession(for: exercise.id) else {
+            return exercise.targets.map {
+                LoggedSet(reps: $0.reps, weight: $0.weight, isWarmup: $0.isWarmup, completed: false)
+            }
+        }
+        let inc = autoIncrement(for: exercise)
+        return last.logged.sets.map {
+            LoggedSet(reps: $0.reps,
+                      weight: $0.isWarmup ? $0.weight : $0.weight + inc,
+                      isWarmup: $0.isWarmup,
+                      completed: false)
+        }
     }
 
     func save(session: Session) {
@@ -84,6 +110,21 @@ final class AppStore: ObservableObject {
             if !set.completed || set.reps < target.reps || set.weight < target.weight {
                 return false
             }
+        }
+        return true
+    }
+
+    /// Wurden alle Arbeitssätze abgehakt und die Ziel-Wiederholungen der
+    /// Vorgaben erreicht? Das Gewicht ist bewusst egal – so greift die
+    /// automatische Steigerung auch nach einem Deload wieder. Zusätzliche
+    /// Sätze über die Vorgaben hinaus müssen das letzte Wdh-Ziel erfüllen.
+    private func hitRepGoals(_ logged: LoggedExercise, targets: [SetTarget]) -> Bool {
+        let goals = targets.filter { !$0.isWarmup }
+        let sets = logged.sets.filter { !$0.isWarmup }
+        guard !goals.isEmpty, sets.count >= goals.count else { return false }
+        for (i, set) in sets.enumerated() {
+            let goal = goals[min(i, goals.count - 1)]
+            if !set.completed || set.reps < goal.reps { return false }
         }
         return true
     }
