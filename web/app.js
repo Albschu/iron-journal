@@ -45,10 +45,13 @@ const STATUS_META = {
 };
 const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, readyToIncrease: 2, maintaining: 3, progressing: 4, noData: 5 };
 
-function statusPill(st) {
+// ids = { r: routineId, e: exerciseId } macht die Pille antippbar:
+// ein Tipp öffnet die „Warum?“-Erklärung (Vergleich der letzten zwei Einheiten).
+function statusPill(st, ids) {
   const m = STATUS_META[st.kind];
   if (!m || st.kind === "noData") return "";
-  return `<span class="pill ${m.cls}">${m.label}</span>`;
+  const tap = ids ? ` data-why-r="${ids.r}" data-why-e="${ids.e}" title="Antippen: Warum dieser Status?"` : "";
+  return `<span class="pill ${m.cls}"${tap}>${m.label}${ids ? `<span class="pill-i">ⓘ</span>` : ""}</span>`;
 }
 
 function statusDetail(st) {
@@ -70,6 +73,89 @@ function statusDetail(st) {
     default:
       return "";
   }
+}
+
+// ---------- „Warum?“ – was hat sich zur vorletzten Einheit verändert? ----------
+// Benennt in einem Satz, WARUM der Tracker „stärker“ sagt: mehr Gewicht,
+// mehr Wiederholungen oder die Kombination (bewertet über das e1RM des besten Satzes).
+function whyHeadline(cmp) {
+  const a = cmp.prev.best, b = cmp.last.best;
+  if (!a || !b) return "Zu wenige Arbeitssätze für einen direkten Vergleich.";
+  const d = cmp.last.signal - cmp.prev.signal;
+  const bodyweight = a.weight === 0 && b.weight === 0;
+  if (d > 0.01) {
+    if (bodyweight)
+      return `Du bist stärker, weil du mehr Wiederholungen geschafft hast: ${a.reps} → ${b.reps}.`;
+    if (b.weight > a.weight && b.reps > a.reps)
+      return `Du bist stärker, weil du mehr Gewicht (${fmtWeight(a.weight)} → ${fmtWeight(b.weight)}) UND mehr Wiederholungen (${a.reps} → ${b.reps}) geschafft hast.`;
+    if (b.weight > a.weight && b.reps >= a.reps)
+      return `Du bist stärker, weil du mehr Gewicht bewegt hast: ${fmtWeight(a.weight)} → ${fmtWeight(b.weight)} bei ${b.reps} Wiederholungen.`;
+    if (b.weight === a.weight && b.reps > a.reps)
+      return `Du bist stärker, weil du bei ${fmtWeight(b.weight)} mehr Wiederholungen geschafft hast: ${a.reps} → ${b.reps}.`;
+    if (b.weight > a.weight)
+      return `Du bist stärker: mehr Gewicht (${fmtWeight(a.weight)} → ${fmtWeight(b.weight)}) trotz weniger Wiederholungen (${a.reps} → ${b.reps}) – unterm Strich +${nf.format(d)} kg e1RM.`;
+    return `Du bist stärker: weniger Gewicht, aber deutlich mehr Wiederholungen (${a.reps} → ${b.reps}) – unterm Strich +${nf.format(d)} kg e1RM.`;
+  }
+  if (d < -0.01)
+    return `Dein bester Satz war etwas schwächer als zuletzt (${bodyweight ? `${a.reps} → ${b.reps} Wdh` : `−${nf.format(Math.abs(d))} kg e1RM`}).`;
+  return "Dein bester Satz war genauso stark wie beim letzten Mal.";
+}
+
+function whyRow(label, aTxt, bTxt, delta, unit) {
+  const chip = delta > 0.005
+    ? `<span class="why-d up">+${nf.format(delta)}${unit}</span>`
+    : delta < -0.005
+      ? `<span class="why-d down">−${nf.format(Math.abs(delta))}${unit}</span>`
+      : `<span class="why-d flat">±0</span>`;
+  return `<div class="why-row"><span class="why-l">${label}</span><span class="why-m">${aTxt} → ${bTxt}</span>${chip}</div>`;
+}
+
+// Vergleichskarte „vorletzte → letzte Einheit“ mit allen Metriken.
+function whySection(exerciseId) {
+  const cmp = store.progressComparison(exerciseId);
+  if (!cmp) {
+    return `<div class="why-note">Für den Vergleich braucht es mindestens zwei Einheiten dieser Übung.</div>`;
+  }
+  const { prev, last } = cmp;
+  const bodyweight = prev.best?.weight === 0 && last.best?.weight === 0;
+  const setTxt = (m) => (m.best ? `${m.best.reps}×${fmtWeightShort(m.best.weight)}` : "–");
+
+  let rows = whyRow("Bester Satz", setTxt(prev), setTxt(last),
+    last.signal - prev.signal, bodyweight ? " Wdh" : " kg");
+  if (!bodyweight) {
+    rows += whyRow("Geschätztes 1RM", nf.format(prev.e1rm), `${nf.format(last.e1rm)} kg`,
+      last.e1rm - prev.e1rm, " kg");
+    rows += whyRow("Schwerster Satz", nf.format(prev.top), `${nf.format(last.top)} kg`,
+      last.top - prev.top, " kg");
+  }
+  rows += whyRow("Wiederholungen gesamt", prev.reps, last.reps, last.reps - prev.reps, "");
+  if (!bodyweight) {
+    rows += whyRow("Volumen (Wdh × kg)", Math.round(prev.volume), `${Math.round(last.volume)} kg`,
+      Math.round(last.volume - prev.volume), " kg");
+  }
+  rows += whyRow("Arbeitssätze", prev.sets, last.sets, last.sets - prev.sets, "");
+
+  return `<div class="section-title">Vergleich: ${fmtDate(prev.date)} → ${fmtDate(last.date)}</div>
+    <div class="card">
+      <div class="why-head">${esc(whyHeadline(cmp))}</div>
+      ${rows}
+    </div>
+    <div class="why-note">Maßstab für „stärker“ ist dein bester Arbeitssatz, bewertet über das geschätzte
+      1-Wiederholungs-Maximum (Epley: Gewicht × (1 + Wdh ÷ 30)). So zählt mehr Gewicht genauso wie mehr
+      Wiederholungen. Bei Körpergewichtsübungen zählen die Wiederholungen direkt.</div>`;
+}
+
+// Modal hinter der antippbaren Status-Pille.
+function openWhy(routineId, exerciseId) {
+  const r = store.routines.find((x) => x.id === routineId);
+  const ex = r?.exercises.find((x) => x.id === exerciseId);
+  if (!ex) return;
+  const st = store.progressionStatus(ex);
+  const label = STATUS_META[st.kind]?.label ?? "Status";
+  const statusCard = `<div class="card"><div class="row" style="border:none;cursor:default">
+    <span class="grow"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st)}</div>
+      <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div></div>`;
+  openModal(`Warum „${label}“?`, statusCard + whySection(exerciseId), { single: true });
 }
 
 // Inline-SVGs für leere Zustände (statt system-abhängiger Emojis)
@@ -192,7 +278,7 @@ function renderSteigerung() {
   const rows = items.map(({ r, ex, st }) => `
     <button class="row" data-action="progress" data-r="${r.id}" data-e="${ex.id}">
       <span class="grow">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st)}</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st, { r: r.id, e: ex.id })}</div>
         <div class="sub2" style="color:var(--muted);margin-top:2px">${esc(statusDetail(st))}</div>
       </span><span class="chev">›</span>
     </button>`).join("");
@@ -316,7 +402,7 @@ function renderDashboard() {
       const sub = last
         ? `Top ${fmtWeight(exerciseTopWeight(last.logged))} · ${relDate(last.date)}`
         : `Vorgabe ${fmtWeight(topTargetWeight(ex))}`;
-      const pill = statusPill(store.progressionStatus(ex));
+      const pill = statusPill(store.progressionStatus(ex), { r: r.id, e: ex.id });
       return `<button class="row" data-action="progress" data-r="${r.id}" data-e="${ex.id}">
         <span class="grow"><h3>${esc(ex.name)}</h3><div class="sub">${sub}</div></span>${pill}
         <span class="chev">›</span></button>`;
@@ -392,6 +478,11 @@ screen.addEventListener("click", (e) => {
   }
   const thBtn = e.target.closest("[data-toggle-theorie]");
   if (thBtn) { DASH.theorie = !DASH.theorie; saveDashState(); rerenderDashboard(); return; }
+
+  // Status-Pille angetippt → „Warum?“ (VOR data-action prüfen: die Pille
+  // sitzt innerhalb der Zeilen-Buttons und soll deren Aktion übersteuern).
+  const why = e.target.closest("[data-why-e]");
+  if (why) { openWhy(why.dataset.whyR, why.dataset.whyE); return; }
 
   const b = e.target.closest("[data-action]");
   if (!b) return;
@@ -592,6 +683,8 @@ function openSession(session, resumed = false) {
     touch();
   });
   body.addEventListener("click", (e) => {
+    const why = e.target.closest("[data-why-e]");
+    if (why) { openWhy(why.dataset.whyR, why.dataset.whyE); return; }
     const t = e.target.closest("[data-act]"); if (!t) return;
     const act = t.dataset.act;
     if (act === "rest-plus") {
@@ -653,7 +746,7 @@ function sessionBody(session) {
       ?.exercises.find((x) => x.id === ex.exerciseId);
     const linked = !!rtEx;
     const note = rtEx?.note?.trim();
-    const pill = rtEx ? statusPill(store.progressionStatus(rtEx)) : "";
+    const pill = rtEx ? statusPill(store.progressionStatus(rtEx), { r: session.routineId, e: rtEx.id }) : "";
     const inc = rtEx ? store.autoIncrement(rtEx) : 0;
     const incTxt = inc > 0
       ? ` <span class="auto-up">↑ automatisch +${fmtWeightShort(inc)} kg</span>` : "";
@@ -756,6 +849,7 @@ function openProgress(routineId, exerciseId) {
     return `<div class="section-title">Aktuelle Vorgabe</div>
       <div class="card">${targetsHtml}${statusBlock}${applyBtn}${rmHtml}
         <div class="setrow"><button class="btn-text" id="adjust">⚙ Arbeitsgewicht anpassen</button></div></div>
+      ${hist.length >= 2 ? whySection(exerciseId) : ""}
       ${charts}${table}`;
   }
 

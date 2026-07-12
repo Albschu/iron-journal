@@ -78,6 +78,17 @@ export function progressSignal(loggedExercise) {
   return Math.max(...ws.map((s) => (s.weight === 0 ? s.reps : epley1RM(s.weight, s.reps))));
 }
 
+/// Der Arbeitssatz, der das Fortschrittssignal liefert (höchstes e1RM bzw.
+/// meiste Wiederholungen bei Körpergewicht). null ohne Arbeitssätze.
+export function bestWorkingSet(loggedExercise) {
+  let best = null, bestSig = -Infinity;
+  for (const s of workingSets(loggedExercise.sets)) {
+    const sig = s.weight === 0 ? s.reps : epley1RM(s.weight, s.reps);
+    if (sig > bestSig) { bestSig = sig; best = s; }
+  }
+  return best;
+}
+
 /// Lineare Regression über (t, y)-Punkte → Trend/Prognose.
 /// Liefert { slope (y pro ms), intercept } oder null bei zu wenig Daten.
 export function linearTrend(points) {
@@ -323,6 +334,27 @@ export class Store {
     if (entries.length < 2) return { kind: "progressing", delta: 0 };
     const delta = progressSignal(last.logged) - progressSignal(entries[entries.length - 2].logged);
     return delta > 0.01 ? { kind: "progressing", delta } : { kind: "maintaining" };
+  }
+
+  /// Kennzahlen der letzten beiden Einheiten einer Übung – Datenbasis für die
+  /// „Warum?“-Erklärung hinter der Status-Pille. null bei < 2 Einheiten.
+  progressComparison(exerciseId) {
+    const h = this.history(exerciseId);
+    if (h.length < 2) return null;
+    const metrics = (e) => {
+      const ws = workingSets(e.logged.sets);
+      return {
+        date: e.date,
+        best: bestWorkingSet(e.logged),
+        e1rm: best1RM(e.logged),
+        top: exerciseTopWeight(e.logged),
+        reps: ws.reduce((n, s) => n + s.reps, 0),
+        volume: exerciseVolume(e.logged),
+        sets: ws.length,
+        signal: progressSignal(e.logged),
+      };
+    };
+    return { prev: metrics(h[h.length - 2]), last: metrics(h[h.length - 1]) };
   }
 
   /// Übernimmt den vorgeschlagenen Gewichtssprung (Arbeitssätze + Schrittweite).
