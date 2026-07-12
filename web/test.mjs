@@ -3,6 +3,7 @@
 import {
   Store, routine, exercise, setTarget,
   exerciseVolume, exerciseTopWeight, epley1RM, best1RM, progressSignal,
+  bestWorkingSet,
   linearTrend, weeklyVolumes, rangeStart, trainingHeatmap, personalRecords,
 } from "./model.js";
 
@@ -253,6 +254,37 @@ const ex0 = (s) => s.routines[0].exercises[0];
      100 * (1 + 5 / 30), "progressSignal = e1RM");
   eq(progressSignal({ sets: [{ reps: 12, weight: 0, isWarmup: false }] }),
      12, "progressSignal Körpergewicht = Wdh");
+}
+
+// Bester Arbeitssatz + „Warum?“-Vergleich (Datenbasis der Status-Pille)
+{
+  const logged = { sets: [
+    { reps: 12, weight: 40, isWarmup: true, completed: true },
+    { reps: 8, weight: 20, isWarmup: false, completed: true },
+    { reps: 5, weight: 25, isWarmup: false, completed: true },
+  ]};
+  eq(bestWorkingSet(logged).weight, 25, "bestWorkingSet: höchstes e1RM, Aufwärmen ignoriert");
+  eq(bestWorkingSet({ sets: [
+    { reps: 10, weight: 0, isWarmup: false }, { reps: 14, weight: 0, isWarmup: false },
+  ] }).reps, 14, "bestWorkingSet Körpergewicht: meiste Wdh");
+  eqs(bestWorkingSet({ sets: [] }), null, "bestWorkingSet ohne Sätze → null");
+}
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  eqs(s.progressComparison(ex0(s).id), null, "progressComparison braucht 2 Einheiten (0 vorhanden)");
+  logSession(s, r, 1000, [[8, 80, true]]);
+  eqs(s.progressComparison(ex0(s).id), null, "progressComparison braucht 2 Einheiten (1 vorhanden)");
+  logSession(s, r, 2000, [[8, 80, true], [9, 82.5, true]]);
+  const cmp = s.progressComparison(ex0(s).id);
+  eq(cmp.prev.top, 80, "Vergleich: Top-Gewicht der vorletzten Einheit");
+  eq(cmp.last.top, 82.5, "Vergleich: Top-Gewicht der letzten Einheit");
+  eq(cmp.last.best.reps, 9, "Vergleich: bester Satz der letzten Einheit (höchstes e1RM)");
+  eq(cmp.last.sets, 2, "Vergleich: Arbeitssätze gezählt");
+  eq(cmp.last.reps, 17, "Vergleich: Wiederholungen summiert");
+  eq(cmp.last.volume, 8 * 80 + 9 * 82.5, "Vergleich: Volumen der letzten Einheit");
+  eq(cmp.last.signal - cmp.prev.signal, epley1RM(82.5, 9) - epley1RM(80, 8),
+     "Vergleich: Signal-Delta = e1RM-Delta des besten Satzes");
 }
 
 // Entwurf speichern/laden/löschen
