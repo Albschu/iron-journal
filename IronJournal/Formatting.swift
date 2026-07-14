@@ -20,6 +20,15 @@ enum Fmt {
         return nf.string(from: value as NSNumber) ?? "\(value)"
     }
 
+    /// Zahl ohne unnötige Nachkommastellen und ohne Einheit (für Deltas/Metriken).
+    static func number(_ value: Double) -> String {
+        let nf = NumberFormatter()
+        nf.locale = Locale(identifier: "de_DE")
+        nf.minimumFractionDigits = 0
+        nf.maximumFractionDigits = 2
+        return nf.string(from: value as NSNumber) ?? "\(value)"
+    }
+
     static func date(_ date: Date) -> String {
         let df = DateFormatter()
         df.locale = Locale(identifier: "de_DE")

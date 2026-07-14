@@ -57,7 +57,7 @@ private struct ExerciseHeader: View {
                 if let ex = store.exercise(with: exercise.exerciseId) {
                     let status = store.progressionStatus(for: ex)
                     if status != .noData {
-                        ProgressionStatusPill(status: status)
+                        TappableStatusPill(status: status, exercise: ex)
                     }
                 }
             }

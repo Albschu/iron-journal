@@ -50,7 +50,7 @@ private struct ExerciseDashboardRow: View {
                 }
             }
             Spacer()
-            ProgressionStatusPill(status: store.progressionStatus(for: exercise))
+            TappableStatusPill(status: store.progressionStatus(for: exercise), exercise: exercise)
         }
         .padding(.vertical, 2)
     }

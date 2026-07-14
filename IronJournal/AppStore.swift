@@ -163,6 +163,25 @@ final class AppStore: ObservableObject {
         return delta > 0.01 ? .progressing(delta: delta) : .maintaining
     }
 
+    /// Kennzahlen der letzten beiden Einheiten einer Übung – Datenbasis für die
+    /// „Warum?“-Erklärung hinter der Status-Pille. nil bei weniger als zwei Einheiten.
+    func progressComparison(for exerciseId: UUID) -> ProgressComparison? {
+        let entries = history(for: exerciseId)
+        guard entries.count >= 2 else { return nil }
+        func metrics(_ entry: ExerciseHistoryEntry) -> SessionMetrics {
+            let working = entry.logged.sets.filter { !$0.isWarmup }
+            return SessionMetrics(date: entry.date,
+                                  best: entry.logged.bestWorkingSet,
+                                  e1RM: entry.logged.bestE1RM,
+                                  topWeight: entry.logged.topWeight,
+                                  totalReps: working.reduce(0) { $0 + $1.reps },
+                                  volume: entry.logged.volume,
+                                  setCount: working.count)
+        }
+        return ProgressComparison(prev: metrics(entries[entries.count - 2]),
+                                  last: metrics(entries[entries.count - 1]))
+    }
+
     /// Übernimmt den vorgeschlagenen Gewichtssprung (Arbeitssätze + Schrittweite).
     /// Wird ausschließlich auf ausdrückliche Nutzeraktion aufgerufen.
     func applySuggestedIncrease(routineId: UUID, exerciseId: UUID) {
