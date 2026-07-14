@@ -75,6 +75,13 @@ struct LoggedExercise: Identifiable, Codable, Hashable {
         sets.filter { !$0.isWarmup }.map(\.estimatedOneRepMax).max() ?? 0
     }
 
+    /// Der Arbeitssatz, der das Fortschrittssignal liefert (höchstes e1RM bzw.
+    /// meiste Wiederholungen bei Körpergewicht). nil ohne Arbeitssätze.
+    var bestWorkingSet: LoggedSet? {
+        sets.filter { !$0.isWarmup }
+            .max { $0.estimatedOneRepMax < $1.estimatedOneRepMax }
+    }
+
     /// Wurden alle (geplanten, abgehakten) Arbeitssätze erledigt?
     var allWorkingSetsCompleted: Bool {
         let working = sets.filter { !$0.isWarmup }
@@ -103,6 +110,64 @@ struct ExerciseHistoryEntry: Identifiable, Hashable {
     var topWeight: Double { logged.topWeight }
     var volume: Double { logged.volume }
     var e1RM: Double { logged.bestE1RM }
+}
+
+// MARK: - „Warum?“-Vergleich (Erklärung hinter der Status-Pille)
+
+/// Kennzahlen einer geloggten Einheit für den „Warum bin ich stärker?“-Vergleich.
+struct SessionMetrics {
+    let date: Date
+    let best: LoggedSet?    // Satz mit dem höchsten Fortschrittssignal
+    let e1RM: Double
+    let topWeight: Double
+    let totalReps: Int
+    let volume: Double
+    let setCount: Int
+}
+
+/// Vergleicht die letzten beiden Einheiten einer Übung Metrik für Metrik und
+/// benennt in einem Satz, WARUM der Tracker „stärker“ sagt: mehr Gewicht,
+/// mehr Wiederholungen oder die Kombination (bewertet über das e1RM des
+/// besten Arbeitssatzes).
+struct ProgressComparison {
+    let prev: SessionMetrics
+    let last: SessionMetrics
+
+    /// Delta des Fortschrittssignals (e1RM bzw. Wdh bei Körpergewicht).
+    var signalDelta: Double { last.e1RM - prev.e1RM }
+
+    /// Beide Einheiten ohne Zusatzgewicht → Wiederholungen sind der Maßstab.
+    var isBodyweight: Bool { prev.best?.weight == 0 && last.best?.weight == 0 }
+
+    var headline: String {
+        guard let a = prev.best, let b = last.best else {
+            return "Zu wenige Arbeitssätze für einen direkten Vergleich."
+        }
+        let d = signalDelta
+        if d > 0.01 {
+            if isBodyweight {
+                return "Du bist stärker, weil du mehr Wiederholungen geschafft hast: \(a.reps) → \(b.reps)."
+            }
+            if b.weight > a.weight && b.reps > a.reps {
+                return "Du bist stärker, weil du mehr Gewicht (\(Fmt.weight(a.weight)) → \(Fmt.weight(b.weight))) UND mehr Wiederholungen (\(a.reps) → \(b.reps)) geschafft hast."
+            }
+            if b.weight > a.weight && b.reps >= a.reps {
+                return "Du bist stärker, weil du mehr Gewicht bewegt hast: \(Fmt.weight(a.weight)) → \(Fmt.weight(b.weight)) bei \(b.reps) Wiederholungen."
+            }
+            if b.weight == a.weight && b.reps > a.reps {
+                return "Du bist stärker, weil du bei \(Fmt.weight(b.weight)) mehr Wiederholungen geschafft hast: \(a.reps) → \(b.reps)."
+            }
+            if b.weight > a.weight {
+                return "Du bist stärker: mehr Gewicht (\(Fmt.weight(a.weight)) → \(Fmt.weight(b.weight))) trotz weniger Wiederholungen (\(a.reps) → \(b.reps)) – unterm Strich +\(Fmt.number(d)) kg e1RM."
+            }
+            return "Du bist stärker: weniger Gewicht, aber deutlich mehr Wiederholungen (\(a.reps) → \(b.reps)) – unterm Strich +\(Fmt.number(d)) kg e1RM."
+        }
+        if d < -0.01 {
+            let delta = isBodyweight ? "\(a.reps) → \(b.reps) Wdh" : "−\(Fmt.number(abs(d))) kg e1RM"
+            return "Dein bester Satz war etwas schwächer als zuletzt (\(delta))."
+        }
+        return "Dein bester Satz war genauso stark wie beim letzten Mal."
+    }
 }
 
 // MARK: - Steigerungs-Status (Tracker)

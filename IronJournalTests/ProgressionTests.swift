@@ -302,6 +302,93 @@ final class ProgressionTests: XCTestCase {
         XCTAssertEqual(weight(of: store, set: 2), 30, accuracy: 0.0001)
     }
 
+    // MARK: - „Warum?“-Vergleich (Datenbasis der Status-Pille)
+
+    func testBestWorkingSetPicksHighestE1RMIgnoringWarmups() {
+        let logged = LoggedExercise(exerciseId: UUID(), name: "Bank", sets: [
+            LoggedSet(reps: 12, weight: 40, isWarmup: true, completed: true),
+            LoggedSet(reps: 8, weight: 20, completed: true),
+            LoggedSet(reps: 5, weight: 25, completed: true),
+        ])
+        XCTAssertEqual(logged.bestWorkingSet?.weight ?? 0, 25, accuracy: 0.0001,
+                       "Höchstes e1RM zählt, Aufwärmsätze werden ignoriert.")
+    }
+
+    func testBestWorkingSetBodyweightPicksMostReps() {
+        let logged = LoggedExercise(exerciseId: UUID(), name: "Liegestütze", sets: [
+            LoggedSet(reps: 10, weight: 0, completed: true),
+            LoggedSet(reps: 14, weight: 0, completed: true),
+        ])
+        XCTAssertEqual(logged.bestWorkingSet?.reps, 14)
+    }
+
+    func testBestWorkingSetNilWithoutSets() {
+        XCTAssertNil(LoggedExercise(exerciseId: UUID(), name: "Bank", sets: []).bestWorkingSet)
+    }
+
+    func testProgressComparisonNeedsTwoSessions() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        XCTAssertNil(store.progressComparison(for: exercise(store).id))
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(8, 80, true)])
+        XCTAssertNil(store.progressComparison(for: exercise(store).id))
+    }
+
+    func testProgressComparisonMetrics() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(8, 80, true)])
+        logSession(store, routine: routine, secondsSinceEpoch: 2_000,
+                   sets: [(8, 80, true), (9, 82.5, true)])
+
+        guard let cmp = store.progressComparison(for: exercise(store).id) else {
+            return XCTFail("Erwartet: Vergleich vorhanden")
+        }
+        XCTAssertEqual(cmp.prev.topWeight, 80, accuracy: 0.0001)
+        XCTAssertEqual(cmp.last.topWeight, 82.5, accuracy: 0.0001)
+        XCTAssertEqual(cmp.last.best?.reps, 9, "Bester Satz = höchstes e1RM der letzten Einheit.")
+        XCTAssertEqual(cmp.last.setCount, 2)
+        XCTAssertEqual(cmp.last.totalReps, 17)
+        XCTAssertEqual(cmp.last.volume, 8 * 80 + 9 * 82.5, accuracy: 0.0001)
+        let expectedDelta = LoggedSet(reps: 9, weight: 82.5).estimatedOneRepMax
+            - LoggedSet(reps: 8, weight: 80).estimatedOneRepMax
+        XCTAssertEqual(cmp.signalDelta, expectedDelta, accuracy: 0.0001,
+                       "Signal-Delta = e1RM-Delta des besten Satzes.")
+        XCTAssertFalse(cmp.isBodyweight)
+        XCTAssertTrue(cmp.headline.contains("mehr Gewicht"),
+                      "Headline benennt den Grund (mehr Gewicht).")
+        XCTAssertTrue(cmp.headline.contains("mehr Wiederholungen"),
+                      "Headline benennt den Grund (mehr Wiederholungen).")
+    }
+
+    func testProgressComparisonBodyweightHeadlineUsesReps() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 25, weight: 0)], increment: 0)
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(25, 0, true)])
+        logSession(store, routine: routine, secondsSinceEpoch: 2_000, sets: [(28, 0, true)])
+
+        guard let cmp = store.progressComparison(for: exercise(store).id) else {
+            return XCTFail("Erwartet: Vergleich vorhanden")
+        }
+        XCTAssertTrue(cmp.isBodyweight)
+        XCTAssertTrue(cmp.headline.contains("25 → 28"),
+                      "Körpergewicht: Headline vergleicht Wiederholungen.")
+    }
+
+    func testProgressComparisonMaintainingHeadline() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(5, 100, true)])
+        logSession(store, routine: routine, secondsSinceEpoch: 2_000, sets: [(5, 100, true)])
+
+        guard let cmp = store.progressComparison(for: exercise(store).id) else {
+            return XCTFail("Erwartet: Vergleich vorhanden")
+        }
+        XCTAssertEqual(cmp.signalDelta, 0, accuracy: 0.0001)
+        XCTAssertTrue(cmp.headline.contains("genauso stark"),
+                      "Ohne Delta erklärt die Headline den Gleichstand.")
+    }
+
     // MARK: - Verlauf
 
     func testHistoryIsChronologicalAndPerExercise() {

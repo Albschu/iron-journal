@@ -62,6 +62,11 @@ struct ExerciseProgressView: View {
                 }
             }
 
+            // Warum dieser Status? Vergleich der letzten zwei Einheiten.
+            if let cmp = store.progressComparison(for: exercise.id) {
+                ProgressComparisonSection(comparison: cmp)
+            }
+
             // Chart: Top-Gewicht über Zeit
             if history.count >= 2 {
                 Section("Top-Gewicht") {

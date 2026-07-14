@@ -68,7 +68,7 @@ struct ImprovementView: View {
                 HStack {
                     Text(item.exercise.name).font(.headline)
                     Spacer()
-                    ProgressionStatusPill(status: item.status)
+                    TappableStatusPill(status: item.status, exercise: item.exercise)
                 }
                 Text(item.routine.name)
                     .font(.caption2)
