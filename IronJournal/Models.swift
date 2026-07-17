@@ -236,9 +236,14 @@ enum ProgressionStatus: Equatable {
 /// Forschungsbasiertes Standard-Schema: 40/60/80 % des Arbeitsgewichts mit
 /// absteigenden Wiederholungen (8/5/3) – der schwere Satz bahnt, ohne zu
 /// ermüden. Körpergewicht (Gewicht 0) → keine prozentualen Aufwärmsätze.
+/// `later` = true: Für spätere Übungen derselben Einheit (Muskulatur schon
+/// warm) reicht laut Evidenz ein einzelner „Einpendel“-Satz zum Finden der
+/// neuen Bewegungsbahn – Standard dann 1× 60 % × 5.
 enum WarmUp {
     static let defaultScheme: [Double] = [0.4, 0.6, 0.8]
     static let defaultReps: [Int] = [8, 5, 3]
+    static let laterScheme: [Double] = [0.6]
+    static let laterReps: [Int] = [5]
 
     /// Rundet auf die nächste Schrittweite (Standard 2,5 kg – gängige Hantelstufe).
     static func roundToStep(_ value: Double, step: Double = 2.5) -> Double {
@@ -248,12 +253,15 @@ enum WarmUp {
 
     /// Aufwärm-Vorgaben (SetTarget) für den Workout-Editor.
     static func targets(workingWeight: Double,
-                        scheme: [Double] = defaultScheme,
-                        reps: [Int] = defaultReps,
+                        later: Bool = false,
+                        scheme: [Double]? = nil,
+                        reps: [Int]? = nil,
                         step: Double = 2.5) -> [SetTarget] {
         guard workingWeight > 0 else { return [] }
-        return scheme.enumerated().map { (i, pct) in
-            SetTarget(reps: reps[min(i, reps.count - 1)],
+        let s = scheme ?? (later ? laterScheme : defaultScheme)
+        let r = reps ?? (later ? laterReps : defaultReps)
+        return s.enumerated().map { (i, pct) in
+            SetTarget(reps: r[min(i, r.count - 1)],
                       weight: roundToStep(workingWeight * pct, step: step),
                       isWarmup: true)
         }
@@ -261,10 +269,11 @@ enum WarmUp {
 
     /// Aufwärm-Sätze (LoggedSet) für eine laufende Einheit.
     static func loggedSets(workingWeight: Double,
-                           scheme: [Double] = defaultScheme,
-                           reps: [Int] = defaultReps,
+                           later: Bool = false,
+                           scheme: [Double]? = nil,
+                           reps: [Int]? = nil,
                            step: Double = 2.5) -> [LoggedSet] {
-        targets(workingWeight: workingWeight, scheme: scheme, reps: reps, step: step)
+        targets(workingWeight: workingWeight, later: later, scheme: scheme, reps: reps, step: step)
             .map { LoggedSet(reps: $0.reps, weight: $0.weight, isWarmup: true, completed: false) }
     }
 }
