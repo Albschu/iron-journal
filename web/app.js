@@ -2,6 +2,7 @@ import {
   Store, routine as mkRoutine, exercise as mkExercise, setTarget as mkTarget,
   exerciseVolume, exerciseTopWeight, sessionVolume, sessionCompletedSetCount,
   topTargetWeight, workingSets, best1RM, linearTrend,
+  warmupTargets, topWorkingWeight,
   rangeStart, trainingHeatmap, personalRecords,
   fmtWeight, fmtWeightShort, fmtDate,
 } from "./model.js";
@@ -703,6 +704,12 @@ function openSession(session, resumed = false) {
       const base = [...ex.sets].reverse().find((s) => !s.isWarmup);
       ex.sets.push({ id: crypto.randomUUID(), reps: base?.reps ?? 8, weight: base?.weight ?? 0, isWarmup: false, completed: false });
       touch(); refresh();
+    } else if (act === "warmups-live") {
+      const gen = warmupTargets(topWorkingWeight(ex.sets));
+      if (!gen.length) { alert("Für Körpergewichtsübungen (0 kg) gibt es keine prozentualen Aufwärmsätze."); return; }
+      const warm = gen.map((t) => ({ id: crypto.randomUUID(), reps: t.reps, weight: t.weight, isWarmup: true, completed: false }));
+      ex.sets = [...warm, ...ex.sets.filter((s) => !s.isWarmup)];
+      touch(); refresh();
     } else if (act === "del-set-live") {
       ex.sets.splice(+t.dataset.set, 1);
       touch(); refresh();
@@ -755,7 +762,9 @@ function sessionBody(session) {
       ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ""}
       ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}${incTxt}</div>` : ""}
       <div class="modal-grp" style="margin-top:4px">${sets}
-        <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button></div>
+        <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button>
+          <span class="spacer"></span>
+          <button class="btn-text warm-add" data-act="warmups-live" data-ex="${ei}">🔥 Aufwärmen</button></div>
       </div>`;
   }).join("");
 }
@@ -907,7 +916,14 @@ function openRoutineEdit(routine, isNew) {
     const act = t.dataset.act, ex = routine.exercises[+t.dataset.ex];
     if (act === "warm") { const tg = ex.targets[+t.dataset.t]; tg.isWarmup = !tg.isWarmup; refresh(); }
     else if (act === "del-set") { ex.targets.splice(+t.dataset.t, 1); refresh(); }
-    else if (act === "add-set") { const l = ex.targets.at(-1); ex.targets.push(mkTarget(l?.reps ?? 8, l?.weight ?? 0)); refresh(); }
+    else if (act === "add-set") { const l = ex.targets.filter((t) => !t.isWarmup).at(-1); ex.targets.push(mkTarget(l?.reps ?? 8, l?.weight ?? 0)); refresh(); }
+    else if (act === "warmups") {
+      const gen = warmupTargets(topWorkingWeight(ex.targets));
+      if (!gen.length) { alert("Für Körpergewichtsübungen (0 kg) gibt es keine prozentualen Aufwärmsätze."); return; }
+      // Vorhandene Aufwärmsätze ersetzen (idempotent), Rampe vor die Arbeitssätze.
+      ex.targets = [...gen, ...ex.targets.filter((t) => !t.isWarmup)];
+      refresh();
+    }
     else if (act === "del-ex") { routine.exercises.splice(+t.dataset.ex, 1); refresh(); }
     else if (act === "add-ex") { routine.exercises.push(mkExercise("", [mkTarget(8, 0)])); refresh(); }
     else if (act === "del-routine") {
@@ -937,9 +953,12 @@ function editBody(routine) {
       <div class="setrow"><textarea class="ex-note-input" rows="1" placeholder="Notiz (z. B. Griff, Tempo, Hinweise)"
         data-field="enote" data-ex="${ei}">${esc(e.note ?? "")}</textarea></div>
       ${targets}
-      <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz</button>
+      <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Arbeitssatz</button>
         <span class="spacer"></span>
-        <span class="unit">Steigerung</span>
+        <button class="btn-text warm-add" data-act="warmups" data-ex="${ei}">🔥 Aufwärmen</button></div>
+      <div class="row-hint">🔥 Aufwärmsatz = leichtere Rampe zum Arbeitsgewicht (40·60·80 %), zählt nicht zum Fortschritt. „Aufwärmen“ erzeugt sie automatisch; danach frei anpassbar.</div>
+      <div class="setrow"><span class="unit">Steigerung je Einheit</span>
+        <span class="spacer"></span>
         <input class="w-kg" type="number" inputmode="decimal" step="0.25" value="${e.increment}" data-field="inc" data-ex="${ei}">
         <span class="unit">kg</span></div>
       <div class="setrow"><button class="btn-text btn-danger" data-act="del-ex" data-ex="${ei}">Übung entfernen</button></div>

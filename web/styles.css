@@ -113,6 +113,11 @@ button { font: inherit; color: inherit; }
 /* Hinweis: Gewicht wurde automatisch vorbefüllt-erhöht */
 .auto-up { color: var(--green); font-weight: 700; white-space: nowrap; }
 
+/* „Aufwärmen“-Knopf (erzeugt die Rampe) + Erklärzeile.
+   .btn-text.warm-add: höhere Spezifität als .btn-text (setzt sonst --tint). */
+.btn-text.warm-add { color: var(--orange); font-weight: 700; }
+.row-hint { color: var(--faint); font-size: 12px; line-height: 1.45; padding: 2px 16px 8px; }
+
 /* Leere Zustände */
 .empty { text-align: center; color: var(--muted); padding: 56px 24px; }
 .empty .big { margin-bottom: 12px; color: var(--faint); }

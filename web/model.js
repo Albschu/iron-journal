@@ -89,6 +89,31 @@ export function bestWorkingSet(loggedExercise) {
   return best;
 }
 
+/// Rundet auf die nächste Schrittweite (Standard 2,5 kg – gängige Hantelstufe).
+export function roundToStep(value, step = 2.5) {
+  if (!(step > 0)) return value;
+  return Math.round(value / step) * step;
+}
+
+/// Erzeugt Aufwärmsätze (isWarmup) als aufsteigende Rampe zum Arbeitsgewicht.
+/// Forschungsbasiertes Standard-Schema: 40/60/80 % des Arbeitsgewichts mit
+/// absteigenden Wiederholungen (8/5/3) – der schwere Satz bahnt, ohne zu
+/// ermüden. Körpergewicht (Gewicht 0) → keine prozentualen Aufwärmsätze.
+export function warmupTargets(workingWeight, opts = {}) {
+  const scheme = opts.scheme ?? [0.4, 0.6, 0.8];
+  const reps = opts.reps ?? [8, 5, 3];
+  const step = opts.step ?? 2.5;
+  if (!(workingWeight > 0)) return [];
+  return scheme.map((pct, i) =>
+    setTarget(reps[Math.min(i, reps.length - 1)], roundToStep(workingWeight * pct, step), true));
+}
+
+/// Schwerstes Arbeitssatz-Gewicht (ohne Aufwärmsätze) – Basis für die Rampe.
+export function topWorkingWeight(sets) {
+  const w = sets.filter((s) => !s.isWarmup).map((s) => s.weight);
+  return w.length ? Math.max(...w) : 0;
+}
+
 /// Lineare Regression über (t, y)-Punkte → Trend/Prognose.
 /// Liefert { slope (y pro ms), intercept } oder null bei zu wenig Daten.
 export function linearTrend(points) {

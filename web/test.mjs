@@ -3,7 +3,7 @@
 import {
   Store, routine, exercise, setTarget,
   exerciseVolume, exerciseTopWeight, epley1RM, best1RM, progressSignal,
-  bestWorkingSet,
+  bestWorkingSet, warmupTargets, roundToStep, topWorkingWeight,
   linearTrend, weeklyVolumes, rangeStart, trainingHeatmap, personalRecords,
 } from "./model.js";
 
@@ -285,6 +285,27 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eq(cmp.last.volume, 8 * 80 + 9 * 82.5, "Vergleich: Volumen der letzten Einheit");
   eq(cmp.last.signal - cmp.prev.signal, epley1RM(82.5, 9) - epley1RM(80, 8),
      "Vergleich: Signal-Delta = e1RM-Delta des besten Satzes");
+}
+
+// Aufwärmsätze (Rampe zum Arbeitsgewicht)
+{
+  eq(roundToStep(34, 2.5), 35, "roundToStep rundet auf 2,5er-Schritt");
+  eq(roundToStep(25.5, 2.5), 25, "roundToStep rundet ab");
+  eqs(roundToStep(17, 0), 17, "roundToStep step 0 → unverändert");
+
+  eq(topWorkingWeight([
+    { weight: 15, isWarmup: true }, { weight: 42.5, isWarmup: false }, { weight: 40, isWarmup: false },
+  ]), 42.5, "topWorkingWeight ignoriert Aufwärmsätze, nimmt Maximum");
+
+  const w = warmupTargets(42.5);
+  eq(w.length, 3, "Standard-Rampe hat 3 Aufwärmsätze");
+  eqs(w.every((t) => t.isWarmup), true, "alle erzeugten Sätze sind Aufwärmsätze");
+  eq(w[0].weight, roundToStep(42.5 * 0.4), "Satz 1 = 40 % gerundet");
+  eq(w[1].weight, roundToStep(42.5 * 0.6), "Satz 2 = 60 % gerundet");
+  eq(w[2].weight, roundToStep(42.5 * 0.8), "Satz 3 = 80 % gerundet");
+  eqs(w[0].reps >= w[1].reps && w[1].reps >= w[2].reps, true, "Wiederholungen steigen ab");
+  eq(warmupTargets(0).length, 0, "Körpergewicht (0 kg) → keine Aufwärmsätze");
+  eq(warmupTargets(100, { scheme: [0.5], reps: [6] })[0].weight, 50, "eigenes Schema wird genutzt");
 }
 
 // Entwurf speichern/laden/löschen
