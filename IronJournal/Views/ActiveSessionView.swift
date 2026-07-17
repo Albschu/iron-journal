@@ -21,6 +21,19 @@ struct ActiveSessionView: View {
                             Label("Satz hinzufügen", systemImage: "plus.circle")
                                 .font(.subheadline)
                         }
+
+                        Button {
+                            // Aufwärm-Rampe aus dem schwersten Arbeitssatz voranstellen.
+                            let generated = WarmUp.loggedSets(workingWeight: exercise.topWeight)
+                            guard !generated.isEmpty else { return }
+                            let working = exercise.sets.filter { !$0.isWarmup }
+                            $exercise.sets.wrappedValue = generated + working
+                        } label: {
+                            Label("Aufwärmen", systemImage: "flame")
+                                .font(.subheadline)
+                        }
+                        .tint(.orange)
+                        .disabled(exercise.topWeight <= 0)
                     } header: {
                         ExerciseHeader(exercise: exercise)
                     }

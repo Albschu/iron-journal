@@ -389,6 +389,46 @@ final class ProgressionTests: XCTestCase {
                       "Ohne Delta erklärt die Headline den Gleichstand.")
     }
 
+    // MARK: - Aufwärmsätze (Rampe zum Arbeitsgewicht)
+
+    func testRoundToStep() {
+        XCTAssertEqual(WarmUp.roundToStep(34), 35, accuracy: 0.0001)
+        XCTAssertEqual(WarmUp.roundToStep(25.5), 25, accuracy: 0.0001)
+        XCTAssertEqual(WarmUp.roundToStep(17, step: 0), 17, accuracy: 0.0001, "step 0 → unverändert")
+    }
+
+    func testWarmUpTargetsRamp() {
+        let w = WarmUp.targets(workingWeight: 42.5)
+        XCTAssertEqual(w.count, 3, "Standard-Rampe hat 3 Aufwärmsätze")
+        XCTAssertTrue(w.allSatisfy { $0.isWarmup }, "alle erzeugten Sätze sind Aufwärmsätze")
+        XCTAssertEqual(w[0].weight, WarmUp.roundToStep(42.5 * 0.4), accuracy: 0.0001, "40 %")
+        XCTAssertEqual(w[1].weight, WarmUp.roundToStep(42.5 * 0.6), accuracy: 0.0001, "60 %")
+        XCTAssertEqual(w[2].weight, WarmUp.roundToStep(42.5 * 0.8), accuracy: 0.0001, "80 %")
+        XCTAssertTrue(w[0].reps >= w[1].reps && w[1].reps >= w[2].reps, "Wiederholungen steigen ab")
+    }
+
+    func testWarmUpEmptyForBodyweight() {
+        XCTAssertTrue(WarmUp.targets(workingWeight: 0).isEmpty,
+                      "Körpergewicht (0 kg) → keine prozentualen Aufwärmsätze")
+        XCTAssertTrue(WarmUp.loggedSets(workingWeight: 0).isEmpty)
+    }
+
+    func testWarmUpLoggedSetsMatchTargets() {
+        let logged = WarmUp.loggedSets(workingWeight: 100)
+        XCTAssertEqual(logged.count, 3)
+        XCTAssertTrue(logged.allSatisfy { $0.isWarmup && !$0.completed })
+        XCTAssertEqual(logged[2].weight, 80, accuracy: 0.0001, "80 % von 100 kg")
+    }
+
+    func testTopWorkingWeightIgnoresWarmups() {
+        let ex = Exercise(name: "Rudern", targets: [
+            SetTarget(reps: 8, weight: 15, isWarmup: true),
+            SetTarget(reps: 8, weight: 42.5),
+            SetTarget(reps: 8, weight: 40),
+        ])
+        XCTAssertEqual(ex.topWorkingWeight, 42.5, accuracy: 0.0001)
+    }
+
     // MARK: - Verlauf
 
     func testHistoryIsChronologicalAndPerExercise() {

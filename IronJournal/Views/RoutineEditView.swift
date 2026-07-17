@@ -24,13 +24,27 @@ struct RoutineEditView: View {
                         .onDelete { $exercise.targets.wrappedValue.remove(atOffsets: $0) }
 
                         Button {
-                            let last = exercise.targets.last
+                            let last = exercise.targets.last(where: { !$0.isWarmup })
                             $exercise.targets.wrappedValue.append(SetTarget(reps: last?.reps ?? 8,
                                                                             weight: last?.weight ?? 0))
                         } label: {
-                            Label("Satz", systemImage: "plus")
+                            Label("Arbeitssatz", systemImage: "plus")
                         }
                         .font(.subheadline)
+
+                        Button {
+                            // Aufwärm-Rampe aus dem Arbeitsgewicht erzeugen; vorhandene
+                            // Aufwärmsätze ersetzen (idempotent), Rampe vor die Arbeitssätze.
+                            let generated = WarmUp.targets(workingWeight: exercise.topWorkingWeight)
+                            guard !generated.isEmpty else { return }
+                            let working = exercise.targets.filter { !$0.isWarmup }
+                            $exercise.targets.wrappedValue = generated + working
+                        } label: {
+                            Label("Aufwärmsätze", systemImage: "flame")
+                        }
+                        .font(.subheadline)
+                        .tint(.orange)
+                        .disabled(exercise.topWorkingWeight <= 0)
 
                         HStack {
                             Text("Steigerung")
@@ -44,6 +58,8 @@ struct RoutineEditView: View {
                         }
                     } header: {
                         Text(exercise.name.isEmpty ? "Übung" : exercise.name)
+                    } footer: {
+                        Text("🔥 Aufwärmsatz = leichtere Rampe zum Arbeitsgewicht (40·60·80 %). Zählt nicht zum Fortschritt. „Aufwärmsätze“ erzeugt sie automatisch; danach frei anpassbar.")
                     }
                 }
                 .onDelete { routine.exercises.remove(atOffsets: $0) }

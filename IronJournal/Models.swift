@@ -24,6 +24,9 @@ struct Exercise: Identifiable, Codable, Hashable {
 
     /// Schwerstes Vorgabe-Gewicht (Top-Set).
     var topTargetWeight: Double { targets.map(\.weight).max() ?? 0 }
+
+    /// Schwerstes Arbeitssatz-Gewicht (ohne Aufwärmsätze) – Basis für die Aufwärm-Rampe.
+    var topWorkingWeight: Double { targets.filter { !$0.isWarmup }.map(\.weight).max() ?? 0 }
 }
 
 /// Ein Workout / eine Trainingseinheit als Vorlage (z. B. "Push", "Rücken").
@@ -224,5 +227,44 @@ enum ProgressionStatus: Equatable {
         case .progressing:     return 4
         case .noData:          return 5
         }
+    }
+}
+
+// MARK: - Aufwärmsätze (Rampe zum Arbeitsgewicht)
+
+/// Erzeugt Aufwärmsätze (isWarmup) als aufsteigende Rampe zum Arbeitsgewicht.
+/// Forschungsbasiertes Standard-Schema: 40/60/80 % des Arbeitsgewichts mit
+/// absteigenden Wiederholungen (8/5/3) – der schwere Satz bahnt, ohne zu
+/// ermüden. Körpergewicht (Gewicht 0) → keine prozentualen Aufwärmsätze.
+enum WarmUp {
+    static let defaultScheme: [Double] = [0.4, 0.6, 0.8]
+    static let defaultReps: [Int] = [8, 5, 3]
+
+    /// Rundet auf die nächste Schrittweite (Standard 2,5 kg – gängige Hantelstufe).
+    static func roundToStep(_ value: Double, step: Double = 2.5) -> Double {
+        guard step > 0 else { return value }
+        return (value / step).rounded() * step
+    }
+
+    /// Aufwärm-Vorgaben (SetTarget) für den Workout-Editor.
+    static func targets(workingWeight: Double,
+                        scheme: [Double] = defaultScheme,
+                        reps: [Int] = defaultReps,
+                        step: Double = 2.5) -> [SetTarget] {
+        guard workingWeight > 0 else { return [] }
+        return scheme.enumerated().map { (i, pct) in
+            SetTarget(reps: reps[min(i, reps.count - 1)],
+                      weight: roundToStep(workingWeight * pct, step: step),
+                      isWarmup: true)
+        }
+    }
+
+    /// Aufwärm-Sätze (LoggedSet) für eine laufende Einheit.
+    static func loggedSets(workingWeight: Double,
+                           scheme: [Double] = defaultScheme,
+                           reps: [Int] = defaultReps,
+                           step: Double = 2.5) -> [LoggedSet] {
+        targets(workingWeight: workingWeight, scheme: scheme, reps: reps, step: step)
+            .map { LoggedSet(reps: $0.reps, weight: $0.weight, isWarmup: true, completed: false) }
     }
 }
