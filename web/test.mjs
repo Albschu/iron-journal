@@ -306,6 +306,13 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eqs(w[0].reps >= w[1].reps && w[1].reps >= w[2].reps, true, "Wiederholungen steigen ab");
   eq(warmupTargets(0).length, 0, "Körpergewicht (0 kg) → keine Aufwärmsätze");
   eq(warmupTargets(100, { scheme: [0.5], reps: [6] })[0].weight, 50, "eigenes Schema wird genutzt");
+
+  // Spätere Übung derselben Einheit: nur 1 Einpendel-Satz (60 %).
+  const late = warmupTargets(42.5, { later: true });
+  eq(late.length, 1, "spätere Übung: nur 1 Aufwärmsatz");
+  eq(late[0].weight, roundToStep(42.5 * 0.6), "Einpendel-Satz = 60 % gerundet");
+  eqs(late[0].isWarmup, true, "Einpendel-Satz ist Aufwärmsatz");
+  eq(warmupTargets(0, { later: true }).length, 0, "Körpergewicht auch später → keine Sätze");
 }
 
 // Entwurf speichern/laden/löschen

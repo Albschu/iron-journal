@@ -705,7 +705,8 @@ function openSession(session, resumed = false) {
       ex.sets.push({ id: crypto.randomUUID(), reps: base?.reps ?? 8, weight: base?.weight ?? 0, isWarmup: false, completed: false });
       touch(); refresh();
     } else if (act === "warmups-live") {
-      const gen = warmupTargets(topWorkingWeight(ex.sets));
+      const later = (+t.dataset.ex) > 0;
+      const gen = warmupTargets(topWorkingWeight(ex.sets), { later });
       if (!gen.length) { alert("Für Körpergewichtsübungen (0 kg) gibt es keine prozentualen Aufwärmsätze."); return; }
       const warm = gen.map((t) => ({ id: crypto.randomUUID(), reps: t.reps, weight: t.weight, isWarmup: true, completed: false }));
       ex.sets = [...warm, ...ex.sets.filter((s) => !s.isWarmup)];
@@ -918,7 +919,9 @@ function openRoutineEdit(routine, isNew) {
     else if (act === "del-set") { ex.targets.splice(+t.dataset.t, 1); refresh(); }
     else if (act === "add-set") { const l = ex.targets.filter((t) => !t.isWarmup).at(-1); ex.targets.push(mkTarget(l?.reps ?? 8, l?.weight ?? 0)); refresh(); }
     else if (act === "warmups") {
-      const gen = warmupTargets(topWorkingWeight(ex.targets));
+      // Spätere Übungen (Index > 0): Muskulatur schon warm → nur 1 Einpendel-Satz.
+      const later = (+t.dataset.ex) > 0;
+      const gen = warmupTargets(topWorkingWeight(ex.targets), { later });
       if (!gen.length) { alert("Für Körpergewichtsübungen (0 kg) gibt es keine prozentualen Aufwärmsätze."); return; }
       // Vorhandene Aufwärmsätze ersetzen (idempotent), Rampe vor die Arbeitssätze.
       ex.targets = [...gen, ...ex.targets.filter((t) => !t.isWarmup)];
@@ -956,7 +959,9 @@ function editBody(routine) {
       <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Arbeitssatz</button>
         <span class="spacer"></span>
         <button class="btn-text warm-add" data-act="warmups" data-ex="${ei}">🔥 Aufwärmen</button></div>
-      <div class="row-hint">🔥 Aufwärmsatz = leichtere Rampe zum Arbeitsgewicht (40·60·80 %), zählt nicht zum Fortschritt. „Aufwärmen“ erzeugt sie automatisch; danach frei anpassbar.</div>
+      <div class="row-hint">🔥 Aufwärmsatz zählt nicht zum Fortschritt. „Aufwärmen“ erzeugt ${ei === 0
+        ? "die volle Rampe (40·60·80 %) für die erste Übung"
+        : "1 Einpendel-Satz (60 %) – spätere Übung, Muskulatur schon warm"}; danach frei anpassbar.</div>
       <div class="setrow"><span class="unit">Steigerung je Einheit</span>
         <span class="spacer"></span>
         <input class="w-kg" type="number" inputmode="decimal" step="0.25" value="${e.increment}" data-field="inc" data-ex="${ei}">
