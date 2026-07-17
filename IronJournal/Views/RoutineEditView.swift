@@ -35,7 +35,9 @@ struct RoutineEditView: View {
                         Button {
                             // Aufwärm-Rampe aus dem Arbeitsgewicht erzeugen; vorhandene
                             // Aufwärmsätze ersetzen (idempotent), Rampe vor die Arbeitssätze.
-                            let generated = WarmUp.targets(workingWeight: exercise.topWorkingWeight)
+                            // Spätere Übung derselben Einheit → nur 1 Einpendel-Satz.
+                            let later = exercise.id != routine.exercises.first?.id
+                            let generated = WarmUp.targets(workingWeight: exercise.topWorkingWeight, later: later)
                             guard !generated.isEmpty else { return }
                             let working = exercise.targets.filter { !$0.isWarmup }
                             $exercise.targets.wrappedValue = generated + working
@@ -59,7 +61,9 @@ struct RoutineEditView: View {
                     } header: {
                         Text(exercise.name.isEmpty ? "Übung" : exercise.name)
                     } footer: {
-                        Text("🔥 Aufwärmsatz = leichtere Rampe zum Arbeitsgewicht (40·60·80 %). Zählt nicht zum Fortschritt. „Aufwärmsätze“ erzeugt sie automatisch; danach frei anpassbar.")
+                        Text(exercise.id == routine.exercises.first?.id
+                             ? "🔥 Aufwärmsatz zählt nicht zum Fortschritt. „Aufwärmsätze“ erzeugt die volle Rampe (40·60·80 %) für die erste Übung; danach frei anpassbar."
+                             : "🔥 Aufwärmsatz zählt nicht zum Fortschritt. „Aufwärmsätze“ erzeugt 1 Einpendel-Satz (60 %) – spätere Übung, Muskulatur schon warm; danach frei anpassbar.")
                     }
                 }
                 .onDelete { routine.exercises.remove(atOffsets: $0) }

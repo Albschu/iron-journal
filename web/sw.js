@@ -2,7 +2,7 @@
 // WICHTIG: Bei jeder Änderung an app.js/model.js/styles.css/index.html die
 // Version hochzählen, sonst liefert die installierte PWA die alten Dateien
 // (Assets sind cache-first).
-const CACHE = "ironjournal-v9";
+const CACHE = "ironjournal-v10";
 const ASSETS = [
   "./", "./index.html", "./styles.css", "./app.js", "./model.js",
   "./manifest.webmanifest",

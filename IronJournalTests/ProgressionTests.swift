@@ -413,6 +413,15 @@ final class ProgressionTests: XCTestCase {
         XCTAssertTrue(WarmUp.loggedSets(workingWeight: 0).isEmpty)
     }
 
+    func testWarmUpLaterExerciseSingleFeelerSet() {
+        let w = WarmUp.targets(workingWeight: 42.5, later: true)
+        XCTAssertEqual(w.count, 1, "spätere Übung: nur 1 Einpendel-Satz")
+        XCTAssertEqual(w[0].weight, WarmUp.roundToStep(42.5 * 0.6), accuracy: 0.0001, "60 %")
+        XCTAssertTrue(w[0].isWarmup)
+        XCTAssertTrue(WarmUp.targets(workingWeight: 0, later: true).isEmpty,
+                      "Körpergewicht auch später → keine Sätze")
+    }
+
     func testWarmUpLoggedSetsMatchTargets() {
         let logged = WarmUp.loggedSets(workingWeight: 100)
         XCTAssertEqual(logged.count, 3)

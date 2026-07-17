@@ -99,9 +99,14 @@ export function roundToStep(value, step = 2.5) {
 /// Forschungsbasiertes Standard-Schema: 40/60/80 % des Arbeitsgewichts mit
 /// absteigenden Wiederholungen (8/5/3) – der schwere Satz bahnt, ohne zu
 /// ermüden. Körpergewicht (Gewicht 0) → keine prozentualen Aufwärmsätze.
+///
+/// opts.later = true: Für spätere Übungen derselben Einheit (Muskulatur schon
+/// warm) reicht laut Evidenz ein einzelner „Einpendel“-Satz zum Finden der
+/// neuen Bewegungsbahn – Standard dann 1× 60 % × 5.
 export function warmupTargets(workingWeight, opts = {}) {
-  const scheme = opts.scheme ?? [0.4, 0.6, 0.8];
-  const reps = opts.reps ?? [8, 5, 3];
+  const later = opts.later ?? false;
+  const scheme = opts.scheme ?? (later ? [0.6] : [0.4, 0.6, 0.8]);
+  const reps = opts.reps ?? (later ? [5] : [8, 5, 3]);
   const step = opts.step ?? 2.5;
   if (!(workingWeight > 0)) return [];
   return scheme.map((pct, i) =>

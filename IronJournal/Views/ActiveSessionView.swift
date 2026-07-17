@@ -24,7 +24,9 @@ struct ActiveSessionView: View {
 
                         Button {
                             // Aufwärm-Rampe aus dem schwersten Arbeitssatz voranstellen.
-                            let generated = WarmUp.loggedSets(workingWeight: exercise.topWeight)
+                            // Spätere Übung derselben Einheit → nur 1 Einpendel-Satz.
+                            let later = exercise.id != session.exercises.first?.id
+                            let generated = WarmUp.loggedSets(workingWeight: exercise.topWeight, later: later)
                             guard !generated.isEmpty else { return }
                             let working = exercise.sets.filter { !$0.isWarmup }
                             $exercise.sets.wrappedValue = generated + working
