@@ -4,7 +4,8 @@ import {
   topTargetWeight, workingSets, best1RM, linearTrend,
   warmupTargets, topWorkingWeight,
   rangeStart, trainingHeatmap, personalRecords,
-  fmtWeight, fmtWeightShort, fmtDate,
+  workoutStats, WORKOUT_METRICS,
+  fmtWeight, fmtWeightShort, fmtDate, fmtMetric,
 } from "./model.js";
 
 const store = new Store(window.localStorage);
@@ -291,19 +292,32 @@ function renderSteigerung() {
 // Farbpalette für die Übungs-Linien im Verlaufschart (zyklisch vergeben).
 const SERIES_COLORS = ["#8b9bff", "#3ddc97", "#ffa057", "#b18cff", "#5ad1e6", "#ff7a9c", "#ffd166", "#7cf0c8"];
 const RANGES = [["4 W", 28], ["12 W", 84], ["1 J", 365], ["Alle", 0]];
+// Auswertungsebene: ganze Workout-Arten (Push, Pull …) oder einzelne Übungen.
+const VIEWS = [["Nach Workout", "workout"], ["Nach Übung", "exercise"]];
+// Metriken für die Workout-Ansicht (Reihenfolge = Reihenfolge im Umschalter).
+const METRIC_ORDER = ["volume", "strength", "sets"];
 
-// Dashboard-Zustand (Zeitraum, sichtbare Übungen, Theorie-Linie) – überlebt
-// Re-Renders innerhalb der Sitzung und wird in localStorage gespiegelt.
+// Dashboard-Zustand (Ebene, Metrik, Zeitraum, sichtbare Serien, Theorie-Linie) –
+// überlebt Re-Renders innerhalb der Sitzung und wird in localStorage gespiegelt.
 const DASH = loadDashState();
 function loadDashState() {
   let saved = {};
   try { saved = JSON.parse(window.localStorage.getItem("ironjournal.dash") || "{}"); } catch { /* egal */ }
-  return { range: saved.range ?? 84, theorie: saved.theorie ?? true, active: Array.isArray(saved.active) ? saved.active : null };
+  return {
+    range: saved.range ?? 84,
+    theorie: saved.theorie ?? true,
+    active: Array.isArray(saved.active) ? saved.active : null,
+    view: saved.view === "exercise" ? "exercise" : "workout",
+    metric: WORKOUT_METRICS[saved.metric] ? saved.metric : "volume",
+    activeW: Array.isArray(saved.activeW) ? saved.activeW : null,
+  };
 }
 function saveDashState() {
   try {
-    window.localStorage.setItem("ironjournal.dash",
-      JSON.stringify({ range: DASH.range, theorie: DASH.theorie, active: DASH.active }));
+    window.localStorage.setItem("ironjournal.dash", JSON.stringify({
+      range: DASH.range, theorie: DASH.theorie, active: DASH.active,
+      view: DASH.view, metric: DASH.metric, activeW: DASH.activeW,
+    }));
   } catch { /* egal */ }
 }
 
@@ -313,6 +327,119 @@ function allExercises() {
   store.routines.forEach((r) => r.exercises.forEach((ex) =>
     out.push({ ex, routineId: r.id, color: SERIES_COLORS[out.length % SERIES_COLORS.length] })));
   return out;
+}
+
+// Stabile Farbe je Workout-Art: nach Position der Routine, damit Push/Pull/Beine
+// immer dieselbe Farbe behalten. Verlauf gelöschter Routinen zählt hinten weiter.
+function workoutColor(key, idx) {
+  const rIdx = store.routines.findIndex((r) => r.id === key);
+  return SERIES_COLORS[(rIdx >= 0 ? rIdx : store.routines.length + idx) % SERIES_COLORS.length];
+}
+
+// ---- Hero: eine Linie je Workout-Art (Push, Pull, Beine …) ----
+function workoutHeroHtml() {
+  const metric = WORKOUT_METRICS[DASH.metric];
+  const stats = workoutStats(store.sessions, { metric: DASH.metric, start: rangeStart(DASH.range) })
+    .map((w, i) => ({ ...w, color: workoutColor(w.key, i) }));
+
+  let html = `<div class="seg sub-seg" role="tablist">` +
+    METRIC_ORDER.map((k) =>
+      `<button class="seg-btn ${k === DASH.metric ? "on" : ""}" data-metric="${k}">${WORKOUT_METRICS[k].label}</button>`).join("") +
+    `</div>`;
+
+  if (!stats.length) {
+    return html + `<div class="card chart-card"><div class="chart-empty">
+      Im gewählten Zeitraum gibt es keine Einheiten. Wähle oben einen längeren Zeitraum.</div></div>`;
+  }
+
+  // Standard-Auswahl: alle Workout-Arten sichtbar (es sind typisch nur 2–4).
+  if (DASH.activeW === null) { DASH.activeW = stats.map((w) => w.key); saveDashState(); }
+  const activeSet = new Set(DASH.activeW);
+  const series = stats.filter((w) => activeSet.has(w.key))
+    .map((w) => ({ name: w.name, color: w.color, pts: w.pts }));
+
+  html += `<div class="section-title">${metric.label} je Einheit · nach Workout</div>`;
+  html += `<div class="card chart-card mchart-card">`;
+  html += series.length
+    ? multiLineChart(series, { fmtY: (v) => fmtMetric(v, metric), padL: 48 })
+    : `<div class="chart-empty">Wähle unten ein Workout aus, um seinen Verlauf zu sehen.</div>`;
+  html += `<div class="tip" hidden></div></div>`;
+
+  html += `<div class="legend">` + stats.map((w) =>
+    `<button class="lchip ${activeSet.has(w.key) ? "on" : ""}" data-toggle-w="${esc(w.key)}" style="--dot:${w.color}">
+       <span class="ldot"></span>${esc(w.name)}</button>`).join("") + `</div>`;
+
+  // Kennzahlen-Kacheln je Workout-Art.
+  html += `<div class="wstats">` + stats.map((w) => {
+    const trend = w.perWeek === null
+      ? `<span class="wtrend flat">Trend: zu wenige Einheiten</span>`
+      : (() => {
+          const up = w.perWeek > 0;
+          const rel = w.avg > 0 ? Math.abs(w.perWeek / w.avg) * 100 : 0;
+          const cls = Math.abs(rel) < 1 ? "flat" : (up ? "up" : "down");
+          const sign = up ? "+" : "−";
+          return `<span class="wtrend ${cls}">${cls === "flat" ? "≈ stabil"
+            : `${sign}${nf.format(rel)} % / Woche`}</span>`;
+        })();
+    return `<div class="card wstat" style="--c:${w.color}">
+      <div class="wstat-head"><span class="ldot"></span><h3>${esc(w.name)}</h3>
+        <span class="wcount">${plural(w.count, "Einheit", "Einheiten")}</span></div>
+      <div class="wstat-grid">
+        <div><div class="wlab">Letzte</div><div class="wval">${fmtMetric(w.last, metric)}</div></div>
+        <div><div class="wlab">Ø</div><div class="wval">${fmtMetric(w.avg, metric)}</div></div>
+        <div><div class="wlab">Beste</div><div class="wval">${fmtMetric(w.best, metric)}</div></div>
+      </div>
+      <div class="wstat-foot">${trend}<span class="wdate">${relDate(w.lastDate)}</span></div>
+    </div>`;
+  }).join("") + `</div>`;
+
+  html += `<div class="row-hint">${metric.key === "volume"
+    ? "Volumen = Σ Wiederholungen × Gewicht aller Arbeitssätze der Einheit. Wächst auch durch mehr Sätze."
+    : metric.key === "strength"
+      ? "Kraft-Index = Summe der besten e1RM je Übung. Steigt nur durch stärkere Sätze, nicht durch mehr Sätze."
+      : "Sätze = abgehakte Arbeitssätze der Einheit (ohne Aufwärmsätze)."}</div>`;
+  return html;
+}
+
+// ---- Hero: eine Linie je Übung (bisherige Detailansicht) ----
+function exerciseHeroHtml() {
+  const start = rangeStart(DASH.range);
+  const withData = allExercises().map((item) => {
+    const hist = store.history(item.ex.id).filter((h) => (!start || new Date(h.date) >= start));
+    return { ...item, pts: hist.map((h) => ({ t: +new Date(h.date), y: exerciseTopWeight(h.logged) })).filter((p) => p.y > 0) };
+  }).filter((it) => it.pts.length);
+
+  if (!withData.length) {
+    return `<div class="card chart-card"><div class="chart-empty">
+      Im gewählten Zeitraum gibt es keine Übungsdaten. Wähle oben einen längeren Zeitraum.</div></div>`;
+  }
+
+  // Standard-Auswahl: die drei meist-trainierten Übungen.
+  if (DASH.active === null) {
+    DASH.active = withData.slice().sort((a, b) => b.pts.length - a.pts.length)
+      .slice(0, 3).map((it) => it.ex.id);
+    saveDashState();
+  }
+  const activeSet = new Set(DASH.active);
+  const series = withData.filter((it) => activeSet.has(it.ex.id)).map((it) => ({
+    name: it.ex.name, color: it.color, pts: it.pts, target: topTargetWeight(it.ex),
+  }));
+
+  let html = `<div class="section-title">Gewicht je Übung</div>`;
+  html += `<div class="card chart-card mchart-card">`;
+  html += series.length
+    ? multiLineChart(series, { showTheorie: DASH.theorie })
+    : `<div class="chart-empty">Wähle unten eine Übung aus, um ihren Verlauf zu sehen.</div>`;
+  html += `<div class="tip" hidden></div></div>`;
+
+  html += `<div class="legend">` +
+    withData.map((it) =>
+      `<button class="lchip ${activeSet.has(it.ex.id) ? "on" : ""}" data-toggle-ex="${it.ex.id}" style="--dot:${it.color}">
+        <span class="ldot"></span>${esc(it.ex.name)}</button>`).join("") +
+    `<button class="lchip theorie ${DASH.theorie ? "on" : ""}" data-toggle-theorie="1">
+       <span class="ldash"></span>Theorie (Vorgabe)</button>` +
+    `</div>`;
+  return html;
 }
 
 function renderDashboard() {
@@ -327,50 +454,18 @@ function renderDashboard() {
   }
 
   const list = allExercises();
-  // Übungen, die im gewählten Zeitraum überhaupt Verlaufsdaten haben.
-  const start = rangeStart(DASH.range);
-  const withData = list.map((item) => {
-    const hist = store.history(item.ex.id)
-      .filter((h) => (!start || new Date(h.date) >= start));
-    return { ...item, pts: hist.map((h) => ({ t: +new Date(h.date), y: exerciseTopWeight(h.logged) })).filter((p) => p.y > 0) };
-  }).filter((it) => it.pts.length);
 
-  // Standard-Auswahl: die drei meist-trainierten Übungen.
-  if (DASH.active === null) {
-    DASH.active = withData.slice()
-      .sort((a, b) => b.pts.length - a.pts.length)
-      .slice(0, 3).map((it) => it.ex.id);
-    saveDashState();
-  }
-  const activeSet = new Set(DASH.active);
-
-  // ---- Hero: Gewichtsverlauf je Übung ----
+  // ---- Ebene (Workout-Art vs. Übung) + Zeitraum ----
+  html += `<div class="seg" role="tablist">` +
+    VIEWS.map(([label, v]) =>
+      `<button class="seg-btn ${v === DASH.view ? "on" : ""}" data-view="${v}">${label}</button>`).join("") +
+    `</div>`;
   html += `<div class="seg" role="tablist">` +
     RANGES.map(([label, days]) =>
       `<button class="seg-btn ${days === DASH.range ? "on" : ""}" data-range="${days}">${label}</button>`).join("") +
     `</div>`;
 
-  const series = withData.filter((it) => activeSet.has(it.ex.id)).map((it) => ({
-    name: it.ex.name, color: it.color, pts: it.pts, target: topTargetWeight(it.ex),
-  }));
-
-  html += `<div class="section-title">Gewicht je Übung</div>`;
-  html += `<div class="card chart-card mchart-card">`;
-  html += series.length
-    ? multiLineChart(series, { showTheorie: DASH.theorie })
-    : `<div class="chart-empty">Wähle unten eine Übung aus, um ihren Verlauf zu sehen.</div>`;
-  html += `<div class="tip" hidden></div></div>`;
-
-  // Legende: Übungen ein-/ausblenden + Theorie-Linie umschalten.
-  html += `<div class="legend">` +
-    withData.map((it) => {
-      const on = activeSet.has(it.ex.id);
-      return `<button class="lchip ${on ? "on" : ""}" data-toggle-ex="${it.ex.id}" style="--dot:${it.color}">
-        <span class="ldot"></span>${esc(it.ex.name)}</button>`;
-    }).join("") +
-    `<button class="lchip theorie ${DASH.theorie ? "on" : ""}" data-toggle-theorie="1">
-       <span class="ldash"></span>Theorie (Vorgabe)</button>` +
-    `</div>`;
+  html += DASH.view === "workout" ? workoutHeroHtml() : exerciseHeroHtml();
 
   // ---- Trainingstage (Heatmap) ----
   html += `<div class="section-title">Trainingstage · letzte 12 Wochen</div>`;
@@ -396,8 +491,17 @@ function renderDashboard() {
   }
 
   // ---- Übungen je Workout (Navigation in den Detail-Fortschritt) ----
+  // Je Workout eine Kopfzeile mit den Kennzahlen des gewählten Zeitraums, damit
+  // die Workout-Ebene auch hier die Klammer um die Übungen bildet.
+  const metric = WORKOUT_METRICS[DASH.metric];
+  const wByKey = new Map(workoutStats(store.sessions,
+    { metric: DASH.metric, start: rangeStart(DASH.range) }).map((w) => [w.key, w]));
   for (const r of store.routines) {
-    html += `<div class="section-title">${esc(r.name)}</div><div class="card">`;
+    const w = wByKey.get(r.id);
+    const sub = w
+      ? `${plural(w.count, "Einheit", "Einheiten")} · ${metric.label} letzte ${fmtMetric(w.last, metric)} · Ø ${fmtMetric(w.avg, metric)}`
+      : "Keine Einheit im gewählten Zeitraum";
+    html += `<div class="section-title">${esc(r.name)}<span class="st-sub">${esc(sub)}</span></div><div class="card">`;
     html += r.exercises.map((ex) => {
       const last = store.lastSession(ex.id);
       const sub = last
@@ -467,9 +571,20 @@ function doImport() {
 
 // ---------- Aktionen (Event-Delegation) ----------
 screen.addEventListener("click", (e) => {
-  // Dashboard-Steuerung (Zeitraum / Übungen ein-/ausblenden / Theorie-Linie)
+  // Dashboard-Steuerung (Ebene / Metrik / Zeitraum / Serien / Theorie-Linie)
+  const viewBtn = e.target.closest("[data-view]");
+  if (viewBtn) { DASH.view = viewBtn.dataset.view; saveDashState(); rerenderDashboard(); return; }
+  const metricBtn = e.target.closest("[data-metric]");
+  if (metricBtn) { DASH.metric = metricBtn.dataset.metric; saveDashState(); rerenderDashboard(); return; }
   const rangeBtn = e.target.closest("[data-range]");
   if (rangeBtn) { DASH.range = +rangeBtn.dataset.range; saveDashState(); rerenderDashboard(); return; }
+  const wBtn = e.target.closest("[data-toggle-w]");
+  if (wBtn) {
+    const key = wBtn.dataset.toggleW;
+    const set = new Set(DASH.activeW ?? []);
+    set.has(key) ? set.delete(key) : set.add(key);
+    DASH.activeW = [...set]; saveDashState(); rerenderDashboard(); return;
+  }
   const exBtn = e.target.closest("[data-toggle-ex]");
   if (exBtn) {
     const id = exBtn.dataset.toggleEx;
@@ -1100,13 +1215,18 @@ function trendSummary(points) {
   return `<div class="trend">${arrow} · Prognose in 4 Wochen: <b>≈ ${nf.format(proj)} kg</b></div>`;
 }
 
-// ---------- Mehrlinien-Chart (Dashboard: Gewicht je Übung über die Tage) ----------
-// series: [{ name, color, pts:[{t (ms), y (kg)}], target }]
-// Zeichnet je Übung eine Linie über eine gemeinsame Zeitachse; optional die
-// aktuelle Vorgabe ("Theorie") als gestrichelte Linie in der Übungsfarbe.
+// ---------- Mehrlinien-Chart (Dashboard: je Übung bzw. je Workout-Art) ----------
+// series: [{ name, color, pts:[{t (ms), y}], target }]
+// Zeichnet je Serie eine Linie über eine gemeinsame Zeitachse; optional die
+// aktuelle Vorgabe ("Theorie") als gestrichelte Linie in der Serienfarbe.
+// fmtY formatiert die Tooltip-Werte (Standard: Gewicht in kg).
 // Interaktiv: Crosshair schnappt auf die Trainingstage (gemeinsame x-Spalten).
 const MPADL = 30, MPADR = 12, MPADT = 16, MPADB = 22;
-function multiLineChart(series, { showTheorie } = {}) {
+function multiLineChart(series, { showTheorie, fmtY, padL } = {}) {
+  const fy = fmtY ?? fmtWeightShort;
+  // Linker Rand: dreistellige kg-Werte auf der Achse brauchen mehr Platz als
+  // die zweistelligen Übungsgewichte, sonst wird die Beschriftung beschnitten.
+  const PL = padL ?? MPADL;
   const withPts = series.filter((s) => s.pts.length);
   const allT = withPts.flatMap((s) => s.pts.map((p) => p.t));
   const ys = withPts.flatMap((s) => s.pts.map((p) => p.y));
@@ -1117,17 +1237,17 @@ function multiLineChart(series, { showTheorie } = {}) {
   const padY = (max - min) * 0.12 || 1;
   max += padY; min = Math.max(0, min - padY);
   const ySpan = (max - min) || 1;
-  const X = (t) => allT.length === 1 ? (MPADL + (CW - MPADL - MPADR) / 2) : MPADL + ((t - tMin) / tSpan) * (CW - MPADL - MPADR);
+  const X = (t) => allT.length === 1 ? (PL + (CW - PL - MPADR) / 2) : PL + ((t - tMin) / tSpan) * (CW - PL - MPADR);
   const Y = (v) => CH - MPADB - ((v - min) / ySpan) * (CH - MPADT - MPADB);
 
-  let s = gridLines2(min, max);
+  let s = gridLines2(min, max, fmtY, PL);
 
   // Theorie-Linien (gestrichelt) hinter den Ist-Linien.
   if (showTheorie) {
     for (const se of series) {
       if (!(se.target > 0)) continue;
       const y = Y(se.target).toFixed(1);
-      s += `<line x1="${MPADL}" y1="${y}" x2="${CW - MPADR}" y2="${y}" stroke="${se.color}" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.55"/>`;
+      s += `<line x1="${PL}" y1="${y}" x2="${CW - MPADR}" y2="${y}" stroke="${se.color}" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.55"/>`;
     }
   }
 
@@ -1146,7 +1266,7 @@ function multiLineChart(series, { showTheorie } = {}) {
     const items = [];
     for (const se of withPts) {
       const p = se.pts.find((q) => q.t === tt);
-      if (p) items.push({ y: +Y(p.y).toFixed(1), color: se.color, txt: `${se.name} ${fmtWeightShort(p.y)}` });
+      if (p) items.push({ y: +Y(p.y).toFixed(1), color: se.color, txt: `${se.name} ${fy(p.y)}` });
     }
     return { x: +X(tt).toFixed(1), label: fmtDate(new Date(tt).toISOString()), items };
   });
@@ -1156,7 +1276,7 @@ function multiLineChart(series, { showTheorie } = {}) {
   const colsJson = JSON.stringify(cols).replace(/'/g, "&#39;");
   return `<svg class="chart mchart" viewBox="0 0 ${CW} ${CH}" preserveAspectRatio="xMidYMid meet" data-w="${CW}" data-cols='${colsJson}'>
     ${s}
-    <text x="${MPADL}" y="${CH - 6}" fill="#6b7099" font-size="10">${startLbl}</text>
+    <text x="${PL}" y="${CH - 6}" fill="#6b7099" font-size="10">${startLbl}</text>
     <text x="${CW - MPADR}" y="${CH - 6}" fill="#6b7099" font-size="10" text-anchor="end">${endLbl}</text>
     <g class="mxh" visibility="hidden"><line x1="0" x2="0" y1="${MPADT}" y2="${CH - MPADB}" stroke="#8b9bff" stroke-width="1" stroke-dasharray="2 3" opacity="0.8"/></g>
     <g class="mdots"></g>
@@ -1164,12 +1284,15 @@ function multiLineChart(series, { showTheorie } = {}) {
 }
 
 // Achsen-Gitter für den Mehrlinien-Chart (eigene Paddings).
-function gridLines2(min, max) {
+// fmt hält große Werte (Volumen) kurz, damit die Beschriftung in MPADL passt.
+function gridLines2(min, max, fmt, padL) {
+  const lbl = fmt ?? ((v) => nf.format(v));
+  const PL = padL ?? MPADL;
   return [0, 0.5, 1].map((f) => {
     const v = min + (max - min) * f;
     const y = CH - MPADB - f * (CH - MPADT - MPADB);
-    return `<line x1="${MPADL}" y1="${y.toFixed(1)}" x2="${CW - MPADR}" y2="${y.toFixed(1)}" stroke="#2b3160" stroke-dasharray="${f ? "3 4" : "0"}"/>
-      <text x="${MPADL - 5}" y="${(y + 3.5).toFixed(1)}" fill="#6b7099" font-size="10" text-anchor="end">${nf.format(v)}</text>`;
+    return `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${CW - MPADR}" y2="${y.toFixed(1)}" stroke="#2b3160" stroke-dasharray="${f ? "3 4" : "0"}"/>
+      <text x="${PL - 5}" y="${(y + 3.5).toFixed(1)}" fill="#6b7099" font-size="10" text-anchor="end">${lbl(v)}</text>`;
   }).join("");
 }
 

@@ -277,3 +277,120 @@ enum WarmUp {
             .map { LoggedSet(reps: $0.reps, weight: $0.weight, isWarmup: true, completed: false) }
     }
 }
+
+// MARK: - Statistik je Workout-Art (Push, Pull, Beine …)
+
+extension Session {
+    /// Kraft-Index einer Einheit: Summe der besten e1RM je Übung. Anders als das
+    /// Volumen wächst er nicht durch zusätzliche Sätze, sondern nur durch
+    /// stärkere Sätze – ein Maß dafür, wie stark die Einheit war, nicht wie lang.
+    var strengthIndex: Double { exercises.reduce(0) { $0 + $1.bestE1RM } }
+}
+
+/// Auswertbare Metrik je Einheit für die Workout-Statistik.
+enum WorkoutMetric: String, CaseIterable, Identifiable {
+    case volume, strength, sets
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .volume:   return "Volumen"
+        case .strength: return "Kraft-Index"
+        case .sets:     return "Sätze"
+        }
+    }
+
+    /// Erklärung, was die Metrik misst (Fußnote unter den Kacheln).
+    var explanation: String {
+        switch self {
+        case .volume:
+            return "Volumen = Σ Wiederholungen × Gewicht aller Arbeitssätze der Einheit. Wächst auch durch mehr Sätze."
+        case .strength:
+            return "Kraft-Index = Summe der besten e1RM je Übung. Steigt nur durch stärkere Sätze, nicht durch mehr Sätze."
+        case .sets:
+            return "Sätze = abgehakte Arbeitssätze der Einheit (ohne Aufwärmsätze)."
+        }
+    }
+
+    func value(of session: Session) -> Double {
+        switch self {
+        case .volume:   return session.totalVolume
+        case .strength: return session.strengthIndex
+        case .sets:     return Double(session.completedSetCount)
+        }
+    }
+
+    /// Formatierter Wert: Volumen ab 1 t kompakt, Kraft-Index in kg, Sätze als Zahl.
+    func format(_ value: Double) -> String {
+        switch self {
+        case .volume:   return Fmt.volume(value)
+        case .strength: return Fmt.number(value.rounded()) + " kg"
+        case .sets:     return Fmt.number(value.rounded())
+        }
+    }
+}
+
+/// Kennzahlen einer Workout-Art über einen Zeitraum.
+struct WorkoutStat: Identifiable {
+    let id: String              // routineId als String, sonst der Name
+    let routineId: UUID?
+    let name: String
+    let points: [(date: Date, value: Double)]
+
+    var count: Int { points.count }
+    var average: Double { points.isEmpty ? 0 : points.reduce(0) { $0 + $1.value } / Double(count) }
+    var last: Double { points.last?.value ?? 0 }
+    var lastDate: Date? { points.last?.date }
+    var best: Double { points.map(\.value).max() ?? 0 }
+
+    /// Trend als Änderung pro Woche (lineare Regression). nil, wenn es weniger
+    /// als 3 Einheiten sind oder die Spanne unter einer Woche liegt – dann wäre
+    /// eine Trendaussage nicht belastbar.
+    var perWeek: Double? {
+        guard count >= 3, let first = points.first, let last = points.last else { return nil }
+        let span = last.date.timeIntervalSince(first.date)
+        guard span >= 7 * 86400 else { return nil }
+        let xs = points.map { $0.date.timeIntervalSince(first.date) }
+        let ys = points.map(\.value)
+        let n = Double(count)
+        let sx = xs.reduce(0, +), sy = ys.reduce(0, +)
+        let sxx = zip(xs, xs).reduce(0) { $0 + $1.0 * $1.1 }
+        let sxy = zip(xs, ys).reduce(0) { $0 + $1.0 * $1.1 }
+        let denom = n * sxx - sx * sx
+        guard denom != 0 else { return nil }
+        return ((n * sxy - sx * sy) / denom) * 7 * 86400
+    }
+
+    /// Relativer Trend in Prozent pro Woche (bezogen auf den Mittelwert).
+    var percentPerWeek: Double? {
+        guard let pw = perWeek, average > 0 else { return nil }
+        return pw / average * 100
+    }
+}
+
+/// Gruppiert Einheiten nach Workout-Art und liefert je Art die Kennzahlen der
+/// gewählten Metrik, meist-trainiertes Workout zuerst. Gruppiert über routineId,
+/// damit umbenannte Routinen ihren Verlauf behalten; der Name der jüngsten
+/// Einheit gewinnt, sodass auch gelöschte Routinen im Verlauf sichtbar bleiben.
+func workoutStats(_ sessions: [Session],
+                  metric: WorkoutMetric = .volume,
+                  since: Date? = nil) -> [WorkoutStat] {
+    var order: [String] = []
+    var byKey: [String: (routineId: UUID?, name: String, pts: [(date: Date, value: Double)])] = [:]
+    for s in sessions.sorted(by: { $0.date < $1.date }) {
+        if let since, s.date < since { continue }
+        let key = s.routineId?.uuidString ?? "name:\(s.routineName)"
+        if byKey[key] == nil {
+            byKey[key] = (s.routineId, s.routineName, [])
+            order.append(key)
+        }
+        byKey[key]!.name = s.routineName
+        byKey[key]!.pts.append((s.date, metric.value(of: s)))
+    }
+    return order.compactMap { key -> WorkoutStat? in
+        guard let g = byKey[key], !g.pts.isEmpty else { return nil }
+        return WorkoutStat(id: key, routineId: g.routineId, name: g.name, points: g.pts)
+    }
+    .sorted { $0.count > $1.count }
+}
