@@ -438,6 +438,81 @@ final class ProgressionTests: XCTestCase {
         XCTAssertEqual(ex.topWorkingWeight, 42.5, accuracy: 0.0001)
     }
 
+    // MARK: - Statistik je Workout-Art
+
+    /// Legt eine Einheit einer Routine mit genau einem Arbeitssatz an.
+    private func session(_ store: AppStore, _ routine: Routine, day: Int,
+                         reps: Int, weight: Double) -> Session {
+        var s = store.makeSession(from: routine)
+        s.date = Date(timeIntervalSince1970: Double(day) * 86400)
+        s.exercises[0].sets = [LoggedSet(reps: reps, weight: weight, completed: true)]
+        return s
+    }
+
+    func testWorkoutStatsGroupsByWorkoutType() {
+        let push = Routine(name: "Push", exercises: [Exercise(name: "Bank", targets: [SetTarget(reps: 10, weight: 50)])])
+        let pull = Routine(name: "Pull", exercises: [Exercise(name: "Rudern", targets: [SetTarget(reps: 10, weight: 40)])])
+        let store = makeStore([push, pull])
+        store.sessions = [
+            session(store, push, day: 0, reps: 10, weight: 50),   // Volumen 500
+            session(store, push, day: 7, reps: 10, weight: 60),   // 600
+            session(store, push, day: 14, reps: 10, weight: 70),  // 700
+            session(store, pull, day: 1, reps: 10, weight: 40),   // 400
+        ]
+
+        let stats = workoutStats(store.sessions)
+        XCTAssertEqual(stats.count, 2, "eine Zeile je Workout-Art")
+        XCTAssertEqual(stats[0].name, "Push", "meist-trainiertes Workout zuerst")
+        XCTAssertEqual(stats[0].count, 3)
+        XCTAssertEqual(stats[0].average, 600, accuracy: 0.001, "Ø Volumen")
+        XCTAssertEqual(stats[0].last, 700, accuracy: 0.001, "letztes Volumen")
+        XCTAssertEqual(stats[0].best, 700, accuracy: 0.001, "bestes Volumen")
+        XCTAssertEqual(stats[0].perWeek ?? 0, 100, accuracy: 0.5, "Trend ≈ +100 kg/Woche")
+        XCTAssertEqual(stats[1].count, 1)
+        XCTAssertNil(stats[1].perWeek, "kein Trend bei einer einzelnen Einheit")
+    }
+
+    func testWorkoutStatsStrengthIndexAndRange() {
+        let push = Routine(name: "Push", exercises: [Exercise(name: "Bank", targets: [SetTarget(reps: 10, weight: 50)])])
+        let store = makeStore([push])
+        store.sessions = [
+            session(store, push, day: 0, reps: 10, weight: 50),
+            session(store, push, day: 14, reps: 10, weight: 70),
+        ]
+
+        let strength = workoutStats(store.sessions, metric: .strength)
+        XCTAssertEqual(strength[0].last,
+                       LoggedSet(reps: 10, weight: 70).estimatedOneRepMax,
+                       accuracy: 0.001, "Kraft-Index = e1RM des besten Satzes")
+
+        // Zeitraum-Filter schneidet die ältere Einheit ab.
+        let recent = workoutStats(store.sessions, since: Date(timeIntervalSince1970: 10 * 86400))
+        XCTAssertEqual(recent.count, 1)
+        XCTAssertEqual(recent[0].count, 1, "nur die jüngere Einheit im Zeitraum")
+    }
+
+    func testWorkoutStatsKeepsHistoryWhenRenamed() {
+        let push = Routine(name: "Push", exercises: [Exercise(name: "Bank", targets: [SetTarget(reps: 10, weight: 50)])])
+        let store = makeStore([push])
+        store.sessions = [
+            session(store, push, day: 0, reps: 10, weight: 50),
+            session(store, push, day: 7, reps: 10, weight: 60),
+        ]
+        // Umbenennen: gruppiert wird über die routineId, der jüngste Name gewinnt.
+        store.sessions[1].routineName = "Push A"
+
+        let stats = workoutStats(store.sessions)
+        XCTAssertEqual(stats.count, 1, "umbenanntes Workout bleibt eine Gruppe")
+        XCTAssertEqual(stats[0].name, "Push A", "jüngster Name gewinnt")
+        XCTAssertEqual(stats[0].count, 2, "Verlauf bleibt vollständig")
+    }
+
+    func testVolumeFormatting() {
+        XCTAssertEqual(Fmt.volume(12500), "12,5 t", "großes Volumen kompakt in Tonnen")
+        XCTAssertEqual(Fmt.volume(700), "700 kg", "kleines Volumen in kg")
+        XCTAssertEqual(WorkoutMetric.sets.format(3), "3", "Sätze ohne Einheit")
+    }
+
     // MARK: - Verlauf
 
     func testHistoryIsChronologicalAndPerExercise() {
