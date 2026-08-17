@@ -270,6 +270,33 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
 .seg-btn.on { background: linear-gradient(135deg, var(--tint), var(--tint2)); color: #0b0e23; font-weight: 700; }
 .seg-btn:not(.on):hover { background: var(--card2); }
 
+/* Zweite Umschalter-Reihe (Metrik) – etwas leiser als die Ebenen-Umschaltung */
+.seg.sub-seg { margin-top: 6px; background: transparent; border-color: transparent; padding: 0; gap: 6px; }
+.seg.sub-seg .seg-btn { background: var(--card); border: 1px solid var(--line); font-size: 12.5px; padding: 7px 0; }
+.seg.sub-seg .seg-btn.on { background: #ffffff14; border-color: var(--tint); color: var(--text); }
+
+/* Kennzahlen je Workout-Art */
+.wstats { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 12px; }
+@media (min-width: 520px) { .wstats { grid-template-columns: 1fr 1fr; } }
+.wstat { --c: var(--tint); padding: 13px 14px 11px; margin: 0; }
+.wstat-head { display: flex; align-items: center; gap: 8px; }
+.wstat-head .ldot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; }
+.wstat-head h3 { font-size: 15px; font-weight: 700; margin: 0; }
+.wstat-head .wcount { margin-left: auto; font-size: 12px; color: var(--faint); font-weight: 600; }
+.wstat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 11px 0 9px; }
+.wlab { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--faint); font-weight: 700; }
+.wval { font-size: 16px; font-weight: 800; margin-top: 2px; white-space: nowrap; }
+.wstat-foot { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.wstat-foot .wdate { margin-left: auto; font-size: 12px; color: var(--faint); }
+.wtrend { font-size: 12.5px; font-weight: 700; }
+.wtrend.up { color: var(--green); }
+.wtrend.down { color: var(--orange); }
+.wtrend.flat { color: var(--faint); font-weight: 600; }
+
+/* Zweite Zeile in einer Abschnitts-Überschrift (Workout-Kennzahlen) */
+.section-title .st-sub { display: block; text-transform: none; letter-spacing: 0;
+  font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 3px; }
+
 /* Mehrlinien-Verlaufschart */
 .mchart-card { padding-top: 16px; }
 .chart-empty { padding: 40px 16px; text-align: center; color: var(--muted); font-size: 14px; }

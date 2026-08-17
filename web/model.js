@@ -132,6 +132,9 @@ export function linearTrend(points) {
   return { slope, intercept: (sy - slope * st) / n };
 }
 
+export const DAY_MS = 86400000;
+export const WEEK_MS = 7 * DAY_MS;
+
 /// Trainingsvolumen je Kalenderwoche (Montag-basiert) der letzten `weeks`
 /// Wochen inkl. der aktuellen; älteste zuerst.
 export function weeklyVolumes(sessions, weeks = 8, now = new Date()) {
@@ -146,7 +149,7 @@ export function weeklyVolumes(sessions, weeks = 8, now = new Date()) {
     return { start: d, volume: 0, sessions: 0 };
   });
   for (const s of sessions) {
-    const idx = Math.floor((new Date(s.date) - start) / (7 * 86400000));
+    const idx = Math.floor((new Date(s.date) - start) / WEEK_MS);
     if (idx >= 0 && idx < weeks) {
       buckets[idx].volume += sessionVolume(s);
       buckets[idx].sessions++;
@@ -177,7 +180,7 @@ export function trainingHeatmap(sessions, weeks = 12, now = new Date()) {
   let maxVol = 0, days = 0;
   for (const s of sessions) {
     const d = new Date(s.date); d.setHours(0, 0, 0, 0);
-    const dayIdx = Math.round((d - start) / 86400000);
+    const dayIdx = Math.round((d - start) / DAY_MS);
     if (dayIdx < 0 || dayIdx >= weeks * 7) continue;
     const wk = Math.floor(dayIdx / 7), wd = (d.getDay() + 6) % 7;
     if (grid[wk][wd] === 0) days++;
@@ -185,6 +188,63 @@ export function trainingHeatmap(sessions, weeks = 12, now = new Date()) {
     if (grid[wk][wd] > maxVol) maxVol = grid[wk][wd];
   }
   return { grid, start, weeks, maxVol, days };
+}
+
+// MARK: - Statistik je Workout-Art (Push, Pull, Beine …)
+
+/// Kraft-Index einer Einheit: Summe der besten e1RM je Übung. Anders als das
+/// Volumen wächst er nicht durch zusätzliche Sätze, sondern nur durch stärkere
+/// Sätze – ein Maß dafür, wie stark die Einheit war, nicht wie lang.
+export function sessionStrengthIndex(session) {
+  return session.exercises.reduce((sum, e) => sum + best1RM(e), 0);
+}
+
+/// Auswertbare Metriken je Einheit. `unit` steuert die Formatierung in der UI.
+export const WORKOUT_METRICS = {
+  volume: { key: "volume", label: "Volumen", unit: "kg", of: sessionVolume },
+  strength: { key: "strength", label: "Kraft-Index", unit: "kg", of: sessionStrengthIndex },
+  sets: { key: "sets", label: "Sätze", unit: "", of: sessionCompletedSetCount },
+};
+
+/// Gruppiert Einheiten nach Workout-Art und liefert je Art eine Zeitreihe der
+/// gewählten Metrik (chronologisch). Gruppiert über routineId, damit umbenannte
+/// Routinen zusammenbleiben; der Name der jüngsten Einheit gewinnt. Einheiten
+/// gelöschter Routinen bleiben sichtbar, weil der Name in der Einheit steckt.
+export function workoutSeries(sessions, opts = {}) {
+  const metric = WORKOUT_METRICS[opts.metric] ?? WORKOUT_METRICS.volume;
+  const start = opts.start ?? null;
+  const groups = new Map();
+  for (const s of sessions.slice().sort((a, b) => new Date(a.date) - new Date(b.date))) {
+    if (start && new Date(s.date) < start) continue;
+    const key = s.routineId ?? `name:${s.routineName}`;
+    if (!groups.has(key)) groups.set(key, { key, routineId: s.routineId ?? null, name: s.routineName, pts: [] });
+    const g = groups.get(key);
+    g.name = s.routineName;
+    g.pts.push({ t: +new Date(s.date), y: metric.of(s), id: s.id });
+  }
+  return [...groups.values()].filter((g) => g.pts.length);
+}
+
+/// Kennzahlen je Workout-Art: Anzahl Einheiten, Mittelwert, letzter/bester Wert
+/// und der Trend als Änderung pro Woche (linear). `perWeek` ist null, wenn der
+/// Zeitraum unter einer Woche liegt oder es zu wenige Einheiten sind – dann
+/// wäre eine Trendaussage nicht belastbar.
+export function workoutStats(sessions, opts = {}) {
+  return workoutSeries(sessions, opts).map((g) => {
+    const ys = g.pts.map((p) => p.y);
+    const first = g.pts[0], last = g.pts[g.pts.length - 1];
+    const spanWeeks = (last.t - first.t) / WEEK_MS;
+    const trend = g.pts.length >= 3 && spanWeeks >= 1 ? linearTrend(g.pts) : null;
+    return {
+      ...g,
+      count: g.pts.length,
+      avg: ys.reduce((a, b) => a + b, 0) / ys.length,
+      last: last.y,
+      lastDate: new Date(last.t).toISOString(),
+      best: Math.max(...ys),
+      perWeek: trend ? trend.slope * WEEK_MS : null,
+    };
+  }).sort((a, b) => b.count - a.count);
 }
 
 /// Persönliche Bestwerte (höchstes geschätztes 1RM) je Übung, beste zuerst.
@@ -494,6 +554,22 @@ export function fmtWeight(value) {
 export function fmtWeightShort(value) {
   if (value === 0) return "KG"; // Körpergewicht
   return nf.format(value);
+}
+
+/// Kompakte Darstellung großer kg-Werte (Trainingsvolumen): ab 1 t in Tonnen,
+/// damit vierstellige Zahlen die Kacheln nicht sprengen.
+export function fmtVolume(value) {
+  if (!value) return "–";
+  if (Math.abs(value) >= 1000) {
+    return new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 }).format(value / 1000) + " t";
+  }
+  return Math.round(value) + " kg";
+}
+
+/// Wert einer Workout-Metrik für die UI (kg-Metriken kompakt, Sätze als Zahl).
+export function fmtMetric(value, metric) {
+  if (!metric || metric.unit !== "kg") return nf.format(Math.round(value));
+  return metric.key === "volume" ? fmtVolume(value) : nf.format(Math.round(value)) + " kg";
 }
 
 export function fmtDate(iso) {

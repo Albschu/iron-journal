@@ -5,6 +5,7 @@ import {
   exerciseVolume, exerciseTopWeight, epley1RM, best1RM, progressSignal,
   bestWorkingSet, warmupTargets, roundToStep, topWorkingWeight,
   linearTrend, weeklyVolumes, rangeStart, trainingHeatmap, personalRecords,
+  workoutStats, WORKOUT_METRICS, sessionStrengthIndex, fmtVolume, fmtMetric, uid,
 } from "./model.js";
 
 // In-Memory-Storage als localStorage-Ersatz.
@@ -423,6 +424,56 @@ const ex0 = (s) => s.routines[0].exercises[0];
   // Bestwert liegt zurück → nicht mehr fresh
   logBank(3000, 5, 90);
   eqs(personalRecords(s)[0].fresh ? 1 : 0, 0, "nicht fresh, wenn Bestwert älter ist");
+}
+
+// Statistik je Workout-Art
+{
+  const push = routine("Push", [exercise("Bank", [setTarget(10, 50)], 2.5)]);
+  const pull = routine("Pull", [exercise("Rudern", [setTarget(10, 40)], 2.5)]);
+  const s = freshStore([push, pull]);
+  const day = (n) => new Date(2026, 5, n, 12).toISOString();
+  const log = (rt, dateIso, reps, weight) => {
+    const ses = s.makeSession(rt);
+    ses.date = dateIso;
+    ses.exercises[0].sets = [{ id: uid(), reps, weight, isWarmup: false, completed: true }];
+    s.saveSession(ses);
+  };
+  // Push: 3 Einheiten über 3 Wochen mit steigendem Volumen; Pull: 1 Einheit.
+  log(push, day(1), 10, 50);   // Volumen 500
+  log(push, day(8), 10, 60);   // 600
+  log(push, day(15), 10, 70);  // 700
+  log(pull, day(2), 10, 40);   // 400
+
+  const stats = workoutStats(s.sessions);
+  eq(stats.length, 2, "eine Zeile je Workout-Art");
+  eqs(stats[0].name, "Push", "meist-trainiertes Workout zuerst");
+  eq(stats[0].count, 3, "Push hat 3 Einheiten");
+  eq(stats[0].avg, 600, "Ø Volumen Push");
+  eq(stats[0].last, 700, "letztes Volumen Push");
+  eq(stats[0].best, 700, "bestes Volumen Push");
+  eqs(stats[0].perWeek > 99 && stats[0].perWeek < 101, true, "Trend ≈ +100 kg Volumen/Woche");
+  eq(stats[1].count, 1, "Pull hat 1 Einheit");
+  eqs(stats[1].perWeek, null, "kein Trend bei einer einzelnen Einheit");
+
+  // Kraft-Index: Summe der besten e1RM je Übung (hier eine Übung).
+  const st = workoutStats(s.sessions, { metric: "strength" });
+  const pushSt = st.find((w) => w.name === "Push");
+  eq(pushSt.last, epley1RM(70, 10), "Kraft-Index = e1RM des besten Satzes");
+
+  // Zeitraum-Filter schneidet ältere Einheiten ab.
+  const only15 = workoutStats(s.sessions, { start: new Date(2026, 5, 10) });
+  eq(only15.length, 1, "nur Push liegt im Zeitraum ab 10.6.");
+  eq(only15[0].count, 1, "eine Push-Einheit im Zeitraum");
+
+  // Gruppierung bleibt stabil, wenn eine Routine umbenannt/gelöscht wird:
+  // der Name der jüngsten Einheit gewinnt, der Verlauf bleibt zusammen.
+  s.sessions.find((x) => x.date === day(15)).routineName = "Push A";
+  const renamed = workoutStats(s.sessions);
+  eq(renamed.find((w) => w.name === "Push A").count, 3, "umbenanntes Workout behält seinen Verlauf");
+
+  eqs(fmtVolume(12500), "12,5 t", "großes Volumen kompakt in Tonnen");
+  eqs(fmtVolume(700), "700 kg", "kleines Volumen in kg");
+  eqs(fmtMetric(3, WORKOUT_METRICS.sets), "3", "Sätze ohne Einheit");
 }
 
 console.log(`\n${pass} Tests bestanden, ${fail} fehlgeschlagen`);
