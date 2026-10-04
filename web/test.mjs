@@ -215,6 +215,33 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eqs(s.progressionStatus(ex0(s)).kind, "maintaining", "Körpergewicht: kein Gewichtsvorschlag");
 }
 
+// 11b: Live-Status – die laufende Einheit zählt als neueste mit
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[5, 100, true]]);
+  logSession(s, r, 2000, [[5, 95, true]]);
+  logSession(s, r, 3000, [[5, 95, true]]);
+  logSession(s, r, 4000, [[5, 95, true]]);
+  eqs(s.progressionStatus(ex0(s)).kind, "stalled", "gespeichert: stagniert");
+  const live = s.makeSession(r);
+  live.date = new Date(5000_000).toISOString();
+  live.exercises[0].sets = [{ id: "x", reps: 5, weight: 95, isWarmup: false, completed: false }];
+  eqs(s.progressionStatus(ex0(s), live).kind, "stalled", "live gleiches Gewicht → weiter stagniert");
+  live.exercises[0].sets[0].weight = 102.5;
+  const st = s.progressionStatus(ex0(s), live);
+  eqs(st.kind, "progressing", "live mehr Gewicht → Fortschritt statt stagniert");
+  eq(st.delta, epley1RM(102.5, 5) - epley1RM(95, 5), "Delta gegenüber letzter Einheit");
+  eqs(s.progressionStatus(ex0(s)).kind, "stalled", "ohne Live-Einheit unverändert");
+  const cmp = s.progressComparison(ex0(s).id, live);
+  eq(cmp.last.top, 102.5, "Warum-Vergleich nutzt die Live-Einheit");
+  // Bereits gespeicherte Einheit erneut bearbeitet → ersetzt, nicht doppelt gezählt.
+  const saved = s.sessions[0];
+  const edit = JSON.parse(JSON.stringify(saved));
+  edit.exercises[0].sets[0].weight = 102.5;
+  eqs(s.progressionStatus(ex0(s), edit).kind, "progressing", "Live-Fassung ersetzt die gespeicherte");
+}
+
 // ---------- Verlauf ----------
 // 12
 {

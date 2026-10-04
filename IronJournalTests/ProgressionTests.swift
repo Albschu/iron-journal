@@ -213,6 +213,40 @@ final class ProgressionTests: XCTestCase {
         XCTAssertEqual(store.progressionStatus(for: exercise(store)), .stalled(sessions: 3))
     }
 
+    /// Die laufende Einheit zählt live als neueste Einheit: mehr Gewicht
+    /// eingetragen → „Fortschritt“ statt „Stagniert“ – schon vor „Fertig“.
+    func testLiveSessionUpdatesStatus() {
+        let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(5, 100, true)])
+        logSession(store, routine: routine, secondsSinceEpoch: 2_000, sets: [(5, 95, true)])
+        logSession(store, routine: routine, secondsSinceEpoch: 3_000, sets: [(5, 95, true)])
+        logSession(store, routine: routine, secondsSinceEpoch: 4_000, sets: [(5, 95, true)])
+
+        var live = store.makeSession(from: routine)
+        live.date = Date(timeIntervalSince1970: 5_000)
+        live.exercises[0].sets = [LoggedSet(reps: 5, weight: 95)]
+        XCTAssertEqual(store.progressionStatus(for: exercise(store), live: live), .stalled(sessions: 4))
+
+        live.exercises[0].sets[0].weight = 102.5
+        let delta = LoggedSet(reps: 5, weight: 102.5).estimatedOneRepMax
+            - LoggedSet(reps: 5, weight: 95).estimatedOneRepMax
+        guard case .progressing(let d) = store.progressionStatus(for: exercise(store), live: live) else {
+            return XCTFail("erwartet .progressing")
+        }
+        XCTAssertEqual(d, delta, accuracy: 0.001)
+        XCTAssertEqual(store.progressComparison(for: exercise(store).id, live: live)?.last.topWeight, 102.5)
+        // Ohne Live-Einheit unverändert.
+        XCTAssertEqual(store.progressionStatus(for: exercise(store)), .stalled(sessions: 3))
+
+        // Bereits gespeicherte Einheit erneut bearbeitet → ersetzt, nicht doppelt gezählt.
+        var edit = store.sessions[0]
+        edit.exercises[0].sets[0].weight = 102.5
+        guard case .progressing = store.progressionStatus(for: exercise(store), live: edit) else {
+            return XCTFail("Live-Fassung sollte die gespeicherte ersetzen")
+        }
+    }
+
     func testDeloadSuggestedAfterFiveSessionsWithoutNewBest() {
         let routine = singleExerciseRoutine(targets: [SetTarget(reps: 8, weight: 20)])
         let store = makeStore([routine])

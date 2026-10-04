@@ -37,6 +37,20 @@ final class AppStore: ObservableObject {
         history(for: exerciseId).last
     }
 
+    /// Verlauf inkl. einer laufenden (noch nicht gespeicherten) Einheit: Die
+    /// Live-Einheit ersetzt ggf. ihre bereits gespeicherte Fassung (gleiche ID)
+    /// und zählt als neueste Einheit – so spiegelt der Status live wider, was
+    /// gerade eingetragen ist (z. B. mehr Gewicht → „Fortschritt“).
+    private func history(for exerciseId: UUID, live: Session?) -> [ExerciseHistoryEntry] {
+        let entries = history(for: exerciseId)
+        guard let live = live,
+              let logged = live.exercises.first(where: { $0.exerciseId == exerciseId }),
+              logged.sets.contains(where: { !$0.isWarmup })
+        else { return entries }
+        return entries.filter { $0.id != live.id }
+            + [ExerciseHistoryEntry(id: live.id, date: live.date, logged: logged)]
+    }
+
     /// Findet eine Übungs-Vorlage anhand ihrer ID über alle Routinen.
     func exercise(with id: UUID) -> Exercise? {
         routines.flatMap(\.exercises).first { $0.id == id }
@@ -140,8 +154,9 @@ final class AppStore: ObservableObject {
 
     /// Prüft, ob sich der Nutzer bei einer Übung selbst steigert, und leitet
     /// daraus einen Status mit Handlungsempfehlung ab. Erhöht NICHTS automatisch.
-    func progressionStatus(for exercise: Exercise) -> ProgressionStatus {
-        let entries = history(for: exercise.id)
+    /// `live`: laufende Einheit, die als neueste Einheit mitzählt.
+    func progressionStatus(for exercise: Exercise, live: Session? = nil) -> ProgressionStatus {
+        let entries = history(for: exercise.id, live: live)
         guard let last = entries.last else { return .noData }
 
         // 1) Bereit für mehr Gewicht? Ziel-Wdh in den letzten zwei Einheiten erreicht.
@@ -165,8 +180,8 @@ final class AppStore: ObservableObject {
 
     /// Kennzahlen der letzten beiden Einheiten einer Übung – Datenbasis für die
     /// „Warum?“-Erklärung hinter der Status-Pille. nil bei weniger als zwei Einheiten.
-    func progressComparison(for exerciseId: UUID) -> ProgressComparison? {
-        let entries = history(for: exerciseId)
+    func progressComparison(for exerciseId: UUID, live: Session? = nil) -> ProgressComparison? {
+        let entries = history(for: exerciseId, live: live)
         guard entries.count >= 2 else { return nil }
         func metrics(_ entry: ExerciseHistoryEntry) -> SessionMetrics {
             let working = entry.logged.sets.filter { !$0.isWarmup }

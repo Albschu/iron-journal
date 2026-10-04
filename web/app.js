@@ -113,8 +113,8 @@ function whyRow(label, aTxt, bTxt, delta, unit) {
 }
 
 // Vergleichskarte „vorletzte → letzte Einheit“ mit allen Metriken.
-function whySection(exerciseId) {
-  const cmp = store.progressComparison(exerciseId);
+function whySection(exerciseId, live = null) {
+  const cmp = store.progressComparison(exerciseId, live);
   if (!cmp) {
     return `<div class="why-note">Für den Vergleich braucht es mindestens zwei Einheiten dieser Übung.</div>`;
   }
@@ -148,16 +148,17 @@ function whySection(exerciseId) {
 }
 
 // Modal hinter der antippbaren Status-Pille.
-function openWhy(routineId, exerciseId) {
+// live: laufende Einheit → Status/Vergleich inkl. der gerade eingetragenen Sätze.
+function openWhy(routineId, exerciseId, live = null) {
   const r = store.routines.find((x) => x.id === routineId);
   const ex = r?.exercises.find((x) => x.id === exerciseId);
   if (!ex) return;
-  const st = store.progressionStatus(ex);
+  const st = store.progressionStatus(ex, live);
   const label = STATUS_META[st.kind]?.label ?? "Status";
   const statusCard = `<div class="card"><div class="row" style="border:none;cursor:default">
     <span class="grow"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st)}</div>
       <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div></div>`;
-  openModal(`Warum „${label}“?`, statusCard + whySection(exerciseId), { single: true });
+  openModal(`Warum „${label}“?`, statusCard + whySection(exerciseId, live), { single: true });
 }
 
 // Inline-SVGs für leere Zustände (statt system-abhängiger Emojis)
@@ -797,10 +798,13 @@ function openSession(session, resumed = false) {
     const set = session.exercises[+inp.dataset.ex].sets[+inp.dataset.set];
     set[inp.dataset.field] = inp.dataset.field === "reps" ? Math.round(num(inp.value)) : num(inp.value);
     touch();
+    // Status-Pille live nachziehen – ohne Neuaufbau, damit der Fokus im Feld bleibt.
+    const slot = body.querySelector(`[data-pill-ex="${inp.dataset.ex}"]`);
+    if (slot) slot.innerHTML = sessionPill(session, +inp.dataset.ex);
   });
   body.addEventListener("click", (e) => {
     const why = e.target.closest("[data-why-e]");
-    if (why) { openWhy(why.dataset.whyR, why.dataset.whyE); return; }
+    if (why) { openWhy(why.dataset.whyR, why.dataset.whyE, session); return; }
     const t = e.target.closest("[data-act]"); if (!t) return;
     const act = t.dataset.act;
     if (act === "rest-plus") {
@@ -847,6 +851,19 @@ function restBarHtml() {
   </div>`;
 }
 
+function routineExercise(session, ei) {
+  const id = session.exercises[ei]?.exerciseId;
+  return session.routineId && store.routines.find((r) => r.id === session.routineId)
+    ?.exercises.find((x) => x.id === id);
+}
+
+// Status-Pille einer Übung der laufenden Einheit: zählt die gerade
+// eingetragenen Sätze als neueste Einheit mit (live, nicht erst nach „Fertig“).
+function sessionPill(session, ei) {
+  const rtEx = routineExercise(session, ei);
+  return rtEx ? statusPill(store.progressionStatus(rtEx, session), { r: session.routineId, e: rtEx.id }) : "";
+}
+
 function sessionBody(session) {
   return session.exercises.map((ex, ei) => {
     const last = store.lastSession(ex.exerciseId);
@@ -865,11 +882,10 @@ function sessionBody(session) {
         </span>
         <button class="del-x" data-act="del-set-live" data-ex="${ei}" data-set="${si}" aria-label="Satz löschen">✕</button>
       </div>`).join("");
-    const rtEx = session.routineId && store.routines.find((r) => r.id === session.routineId)
-      ?.exercises.find((x) => x.id === ex.exerciseId);
+    const rtEx = routineExercise(session, ei);
     const linked = !!rtEx;
     const note = rtEx?.note?.trim();
-    const pill = rtEx ? statusPill(store.progressionStatus(rtEx), { r: session.routineId, e: rtEx.id }) : "";
+    const pill = `<span class="pill-slot" data-pill-ex="${ei}">${sessionPill(session, ei)}</span>`;
     const inc = rtEx ? store.autoIncrement(rtEx) : 0;
     const incTxt = inc > 0
       ? ` <span class="auto-up">↑ automatisch +${fmtWeightShort(inc)} kg</span>` : "";

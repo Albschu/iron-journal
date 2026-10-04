@@ -61,6 +61,7 @@ struct ProgressionStatusPill: View {
 struct TappableStatusPill: View {
     let status: ProgressionStatus
     let exercise: Exercise
+    var live: Session? = nil
     @State private var showWhy = false
 
     var body: some View {
@@ -71,7 +72,7 @@ struct TappableStatusPill: View {
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showWhy) {
-            WhyStatusView(exercise: exercise)
+            WhyStatusView(exercise: exercise, live: live)
         }
     }
 }

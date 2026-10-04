@@ -396,12 +396,25 @@ export class Store {
     return h.length ? h[h.length - 1] : null;
   }
 
+  /// Verlauf inkl. einer laufenden (noch nicht gespeicherten) Einheit: Die
+  /// Live-Einheit ersetzt ggf. ihre bereits gespeicherte Fassung (gleiche ID)
+  /// und zählt als neueste Einheit – so spiegelt der Status live wider, was
+  /// gerade eingetragen ist (z. B. mehr Gewicht → „Fortschritt“).
+  _historyWithLive(exerciseId, liveSession) {
+    const h = this.history(exerciseId);
+    const logged = liveSession?.exercises.find((e) => e.exerciseId === exerciseId);
+    if (!logged || !workingSets(logged.sets).length) return h;
+    return [...h.filter((e) => e.id !== liveSession.id),
+      { id: liveSession.id, date: liveSession.date, logged }];
+  }
+
   /// Prüft, ob sich der Nutzer bei einer Übung selbst steigert, und leitet
   /// daraus einen Status mit Handlungsempfehlung ab. Erhöht NICHTS automatisch.
   /// Liefert { kind, ... } mit kind ∈
   /// noData | progressing | maintaining | readyToIncrease | stalled | deloadSuggested.
-  progressionStatus(ex) {
-    const entries = this.history(ex.id);
+  /// liveSession (optional): laufende Einheit, die als neueste mitzählt.
+  progressionStatus(ex, liveSession = null) {
+    const entries = this._historyWithLive(ex.id, liveSession);
     if (entries.length === 0) return { kind: "noData" };
     const last = entries[entries.length - 1];
 
@@ -428,8 +441,8 @@ export class Store {
 
   /// Kennzahlen der letzten beiden Einheiten einer Übung – Datenbasis für die
   /// „Warum?“-Erklärung hinter der Status-Pille. null bei < 2 Einheiten.
-  progressComparison(exerciseId) {
-    const h = this.history(exerciseId);
+  progressComparison(exerciseId, liveSession = null) {
+    const h = this._historyWithLive(exerciseId, liveSession);
     if (h.length < 2) return null;
     const metrics = (e) => {
       const ws = workingSets(e.logged.sets);

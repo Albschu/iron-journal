@@ -189,6 +189,8 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
 .ex-head { display: flex; align-items: center; gap: 8px; padding: 18px 16px 6px; }
 .ex-head h3 { margin: 0; font-size: 18px; flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Wrapper der Status-Pille in der laufenden Einheit (wird live ersetzt) */
+.ex-head .pill-slot { display: contents; }
 
 /* Erledigte Sätze */
 .setrow.done { background: rgba(61, 220, 151, 0.055); }

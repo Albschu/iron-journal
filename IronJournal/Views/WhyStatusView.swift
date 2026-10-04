@@ -7,8 +7,10 @@ struct WhyStatusView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     let exercise: Exercise
+    /// Laufende Einheit → Status/Vergleich inkl. der gerade eingetragenen Sätze.
+    var live: Session? = nil
 
-    private var status: ProgressionStatus { store.progressionStatus(for: exercise) }
+    private var status: ProgressionStatus { store.progressionStatus(for: exercise, live: live) }
 
     var body: some View {
         NavigationStack {
@@ -27,7 +29,7 @@ struct WhyStatusView: View {
                     .padding(.vertical, 2)
                 }
 
-                if let cmp = store.progressComparison(for: exercise.id) {
+                if let cmp = store.progressComparison(for: exercise.id, live: live) {
                     ProgressComparisonSection(comparison: cmp)
                 } else {
                     Section {
