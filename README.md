@@ -8,9 +8,21 @@ Minimalistische iOS-App (SwiftUI) zum Tracking von Krafttraining – als Ersatz 
 - **Verlauf** – Jede abgeschlossene Einheit mit Datum, Volumen und allen Sätzen.
 - **Dashboard** – Pro Übung Top-Gewicht- und Volumen-Charts über die Zeit, tabellarischer Verlauf und Steigerungs-Status.
 - **Progressive Overload** – Wenn in der letzten Einheit alle Arbeitssätze mit den Ziel-Wiederholungen abgehakt waren, wird das Arbeitsgewicht beim nächsten Start automatisch um die eingestellte Schrittweite erhöht (pro Übung konfigurierbar, z. B. 2,5 kg an der Hantel, 1,25 kg am Block). Gewichte lassen sich jederzeit auch manuell anpassen.
+- **Steigerungsvorschlag** – Pro Übung zeigt die App live im Training, *wie viel* du erhöhen solltest (z. B. „+5 kg → 105 kg (+5 %)“) und *wann*: erst wenn alle Arbeitssätze in zwei Einheiten in Folge die Ziel-Wdh schaffen. Der Status („Stagniert“, „Fortschritt“ …) zählt die gerade eingetragenen Sätze schon mit.
 - **Eigene Workouts** – Workouts und Übungen frei anlegen, bearbeiten und löschen. Aufwärmsätze werden markiert und von der Progression ausgenommen.
 
 Alle Daten bleiben lokal auf dem Gerät (JSON im Documents-Ordner). Keine Accounts, kein Netzwerk.
+
+## Steigerungsvorschlag – Datenbasis
+
+| Regel | Quelle |
+|---|---|
+| **+2–10 %** Last, sobald die Ziel-Wdh in **zwei Einheiten in Folge** geschafft (bzw. um 1–2 Wdh übertroffen) werden; kleiner Prozentsatz für kleine, größerer für große Muskelgruppen | ACSM Position Stand „Progression Models in Resistance Training for Healthy Adults“, *Med Sci Sports Exerc* 41(3):687–708, 2009 (Evidenzkategorie B) |
+| Absolute Sprünge: Oberkörper ≈ +1–4 kg, Unterkörper ≈ +2–7 kg je nach Trainingsstand („2-for-2“-Regel) | NSCA, *Essentials of Strength Training and Conditioning*, Kap. Program Design |
+| Wdh-Steigerung bringt praktisch dieselben Kraft-/Muskelzuwächse wie Last-Steigerung → bei zu großen Gewichtssprüngen erst Wdh steigern (Doppelprogression) | Plotkin et al., *PeerJ* 10:e14142, 2022 |
+| Extra-Wdh über dem Ziel → Reserve nach Epley (1RM = Gewicht × (1 + Wdh/30)), ≈ 3 % pro Wdh | Epley 1985 |
+
+Umsetzung: Die Übung wird über ihren Namen eingeordnet (Unterkörper-Grundübung 5–10 %, max. 7,5 kg · Oberkörper-Grundübung 2,5–5 %, max. 5 kg · Isolationsübung 2–5 %, max. 2,5 kg). Innerhalb der Spanne entscheiden deine Daten: Hast du das Ziel genau erreicht, gilt der untere Rand; hat der schwächste Satz Wdh übrig, rechnet Epley den passenden Sprung aus. Gerundet wird auf die Schrittweite der Übung (mindestens ein Schritt). Liegt schon ein Schritt über der Spanne, weist die App auf die Wdh-Progression hin.
 
 ## Aufbau
 

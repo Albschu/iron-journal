@@ -37,6 +37,20 @@ final class AppStore: ObservableObject {
         history(for: exerciseId).last
     }
 
+    /// Verlauf inkl. einer laufenden (noch nicht gespeicherten) Einheit: Die
+    /// Live-Einheit ersetzt ggf. ihre bereits gespeicherte Fassung (gleiche ID)
+    /// und zählt als neueste Einheit – so spiegelt der Status live wider, was
+    /// gerade eingetragen ist (z. B. mehr Gewicht → „Fortschritt“).
+    private func history(for exerciseId: UUID, live: Session?) -> [ExerciseHistoryEntry] {
+        let entries = history(for: exerciseId)
+        guard let live = live,
+              let logged = live.exercises.first(where: { $0.exerciseId == exerciseId }),
+              logged.sets.contains(where: { !$0.isWarmup })
+        else { return entries }
+        return entries.filter { $0.id != live.id }
+            + [ExerciseHistoryEntry(id: live.id, date: live.date, logged: logged)]
+    }
+
     /// Findet eine Übungs-Vorlage anhand ihrer ID über alle Routinen.
     func exercise(with id: UUID) -> Exercise? {
         routines.flatMap(\.exercises).first { $0.id == id }
@@ -140,13 +154,17 @@ final class AppStore: ObservableObject {
 
     /// Prüft, ob sich der Nutzer bei einer Übung selbst steigert, und leitet
     /// daraus einen Status mit Handlungsempfehlung ab. Erhöht NICHTS automatisch.
-    func progressionStatus(for exercise: Exercise) -> ProgressionStatus {
-        let entries = history(for: exercise.id)
+    /// `live`: laufende Einheit, die als neueste Einheit mitzählt.
+    func progressionStatus(for exercise: Exercise, live: Session? = nil) -> ProgressionStatus {
+        let entries = history(for: exercise.id, live: live)
         guard let last = entries.last else { return .noData }
 
         // 1) Bereit für mehr Gewicht? Ziel-Wdh in den letzten zwei Einheiten erreicht.
         if exercise.increment > 0, entries.count >= 2,
            entries.suffix(2).allSatisfy({ hitAllTargets($0.logged, targets: exercise.targets) }) {
+            if let sug = IncreaseSuggestion(exercise: exercise, last: last.logged) {
+                return .readyToIncrease(suggested: sug.to)
+            }
             let base = exercise.targets.first(where: { !$0.isWarmup })?.weight ?? last.topWeight
             return .readyToIncrease(suggested: base + exercise.increment)
         }
@@ -163,10 +181,27 @@ final class AppStore: ObservableObject {
         return delta > 0.01 ? .progressing(delta: delta) : .maintaining
     }
 
+    /// Erhöhungsvorschlag inkl. Bereitschaft (siehe `IncreasePlan`). nil ohne Verlauf.
+    func increasePlan(for exercise: Exercise, live: Session? = nil) -> IncreasePlan? {
+        let entries = history(for: exercise.id, live: live)
+        guard let last = entries.last else { return nil }
+        // Eine laufende Einheit, die das Ziel (noch) nicht erfüllt, unterbricht
+        // die Serie nicht – sie ist ja noch nicht fertig.
+        let pending = live.map { $0.id == last.id } == true
+            && !hitAllTargets(last.logged, targets: exercise.targets)
+        var streak = 0
+        for entry in entries.dropLast(pending ? 1 : 0).reversed() {
+            guard streak < 2, hitAllTargets(entry.logged, targets: exercise.targets) else { break }
+            streak += 1
+        }
+        return IncreasePlan(suggestion: IncreaseSuggestion(exercise: exercise, last: last.logged),
+                            streak: streak)
+    }
+
     /// Kennzahlen der letzten beiden Einheiten einer Übung – Datenbasis für die
     /// „Warum?“-Erklärung hinter der Status-Pille. nil bei weniger als zwei Einheiten.
-    func progressComparison(for exerciseId: UUID) -> ProgressComparison? {
-        let entries = history(for: exerciseId)
+    func progressComparison(for exerciseId: UUID, live: Session? = nil) -> ProgressComparison? {
+        let entries = history(for: exerciseId, live: live)
         guard entries.count >= 2 else { return nil }
         func metrics(_ entry: ExerciseHistoryEntry) -> SessionMetrics {
             let working = entry.logged.sets.filter { !$0.isWarmup }
@@ -188,8 +223,15 @@ final class AppStore: ObservableObject {
         guard let rIdx = routines.firstIndex(where: { $0.id == routineId }),
               let eIdx = routines[rIdx].exercises.firstIndex(where: { $0.id == exerciseId })
         else { return }
-        let inc = routines[rIdx].exercises[eIdx].increment
-        guard inc > 0 else { return }
+        let ex = routines[rIdx].exercises[eIdx]
+        guard ex.increment > 0 else { return }
+        // Datengestützter Sprung (siehe `IncreaseSuggestion`); sonst eine Schrittweite.
+        var inc = ex.increment
+        if case .readyToIncrease = progressionStatus(for: ex),
+           let last = history(for: ex.id).last,
+           let sug = IncreaseSuggestion(exercise: ex, last: last.logged) {
+            inc = sug.delta
+        }
         routines[rIdx].exercises[eIdx].targets = routines[rIdx].exercises[eIdx].targets.map { target in
             var t = target
             if !t.isWarmup { t.weight += inc }

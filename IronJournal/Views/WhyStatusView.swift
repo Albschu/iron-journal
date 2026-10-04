@@ -7,8 +7,10 @@ struct WhyStatusView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     let exercise: Exercise
+    /// Laufende Einheit → Status/Vergleich inkl. der gerade eingetragenen Sätze.
+    var live: Session? = nil
 
-    private var status: ProgressionStatus { store.progressionStatus(for: exercise) }
+    private var status: ProgressionStatus { store.progressionStatus(for: exercise, live: live) }
 
     var body: some View {
         NavigationStack {
@@ -27,7 +29,11 @@ struct WhyStatusView: View {
                     .padding(.vertical, 2)
                 }
 
-                if let cmp = store.progressComparison(for: exercise.id) {
+                if let plan = store.increasePlan(for: exercise, live: live) {
+                    IncreaseSuggestionSection(plan: plan)
+                }
+
+                if let cmp = store.progressComparison(for: exercise.id, live: live) {
                     ProgressComparisonSection(comparison: cmp)
                 } else {
                     Section {
@@ -44,6 +50,80 @@ struct WhyStatusView: View {
                     Button("Fertig") { dismiss() }
                         .fontWeight(.semibold)
                 }
+            }
+        }
+    }
+}
+
+/// Kurze Vorschlagszeile unter einer Übung in der laufenden Einheit (live).
+struct IncreaseSuggestionLine: View {
+    let plan: IncreasePlan
+
+    var body: some View {
+        if let sug = plan.suggestion {
+            let amount = "+\(Fmt.weightShort(sug.delta)) kg → \(Fmt.weight(sug.to)) (+\(Fmt.percent(sug.pct)))"
+            if plan.ready {
+                (Text("💡 Nächstes Mal: ") + Text(amount).bold().foregroundColor(.green)
+                    + Text(sug.bigStep ? " · großer Sprung – alternativ erst +1–2 Wdh" : ""))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("💡 Nächste Erhöhung: \(amount), sobald alle Sätze ihre Ziel-Wdh schaffen (\(plan.streak)/2 Einheiten)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else if plan.ready {
+            Text("💡 Ziel 2× geschafft – steigere die Wiederholungen (+1 je Satz).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Begründeter Erhöhungsvorschlag (Wann / Spanne / Deine Daten + Quellen) –
+/// im „Warum?“-Sheet und in der Übungs-Detailansicht.
+struct IncreaseSuggestionSection: View {
+    let plan: IncreasePlan
+
+    var body: some View {
+        if let sug = plan.suggestion {
+            let cls = sug.liftClass
+            Section(plan.ready ? "Vorschlag: jetzt Erhöhung" : "Vorschlag: nächste Erhöhung") {
+                Text("+\(Fmt.weightShort(sug.delta)) kg → \(Fmt.weight(sug.to)) (+\(Fmt.percent(sug.pct)))")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.vertical, 2)
+                ReasonRow(label: "Wann", text: plan.ready
+                    ? "Ziel in 2 Einheiten in Folge erreicht → jetzt erhöhen."
+                    : "Erst erhöhen, wenn alle Arbeitssätze in 2 Einheiten in Folge die Ziel-Wdh schaffen (aktuell \(plan.streak)/2).")
+                ReasonRow(label: "Spanne",
+                          text: "\(cls.label): \(Fmt.percent(cls.lo))–\(Fmt.percent(cls.hi)), max. \(Fmt.weightShort(cls.maxKg)) kg")
+                ReasonRow(label: "Deine Daten", text: sug.surplus > 0
+                    ? "Dein schwächster Satz lag \(sug.surplus) Wdh über dem Ziel – nach Epley entspricht das ≈ +\(Fmt.percent(sug.dataPct)) Reserve."
+                    : "Du hast das Ziel genau erreicht (keine Extra-Wdh) – daher der untere Rand der Spanne.")
+                if sug.bigStep {
+                    ReasonRow(label: "Hinweis",
+                              text: "Schon der kleinste Schritt (\(Fmt.weightShort(sug.delta)) kg = \(Fmt.percent(sug.pct))) liegt über der Spanne. Alternativ erst die Wdh um 1–2 steigern (Doppelprogression) – das wirkt laut Studien ähnlich gut.")
+                }
+                Text("Grundlage: ACSM Position Stand 2009 (+2–10 %, sobald die Ziel-Wdh in zwei Einheiten in Folge geschafft werden; kleinere Sprünge für kleine Muskelgruppen), NSCA „2-for-2“-Regel (Oberkörper ≈ +1–4 kg, Unterkörper ≈ +2–7 kg), Plotkin et al. 2022 (Wdh- und Laststeigerung ähnlich wirksam). Gerundet auf die Schrittweite der Übung.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private struct ReasonRow: View {
+        let label: String
+        let text: String
+
+        var body: some View {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 84, alignment: .leading)
+                Text(text)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

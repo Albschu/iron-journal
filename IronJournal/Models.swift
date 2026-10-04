@@ -230,6 +230,116 @@ enum ProgressionStatus: Equatable {
     }
 }
 
+// MARK: - Erhöhungsvorschlag (wie viel mehr Gewicht?)
+//
+// Datenbasis (siehe README „Steigerungsvorschlag“):
+// • ACSM Position Stand 2009 (Med Sci Sports Exerc 41:687–708, Evidenz B):
+//   +2–10 % Last, wenn die Ziel-Wdh in zwei Einheiten in Folge geschafft (bzw.
+//   1–2 Wdh übertroffen) werden – kleiner Prozentsatz für kleine, größerer für
+//   große Muskelgruppen.
+// • NSCA (Essentials of S&C, „2-for-2“): Oberkörper ≈ +1–4 kg, Unterkörper
+//   ≈ +2–7 kg je nach Trainingsstand.
+// • Epley (1RM = w·(1 + Wdh/30)): Jede Wdh über dem Ziel ≈ +3 % Reserve – so
+//   skaliert der Vorschlag mit deiner tatsächlichen Leistung.
+// • Plotkin et al. 2022 (PeerJ 10:e14142): Wdh-Steigerung bringt praktisch
+//   gleich viel wie Last-Steigerung → ist der kleinste Gewichtssprung zu groß,
+//   lieber erst Wdh steigern (Doppelprogression).
+
+/// Übungsklasse mit Steigerungsspanne (Anteil vom Arbeitsgewicht, ACSM) und
+/// absoluter Obergrenze je Sprung (`maxKg`, an NSCA angelehnt).
+enum LiftClass: String {
+    case lower, upper, small
+
+    var label: String {
+        switch self {
+        case .lower: return "Unterkörper-Grundübung"
+        case .upper: return "Oberkörper-Grundübung"
+        case .small: return "Isolationsübung"
+        }
+    }
+    var lo: Double { switch self { case .lower: return 0.05; case .upper: return 0.025; case .small: return 0.02 } }
+    var hi: Double { switch self { case .lower: return 0.10; case .upper, .small: return 0.05 } }
+    var maxKg: Double { switch self { case .lower: return 7.5; case .upper: return 5; case .small: return 2.5 } }
+
+    private static let smallKeys = ["curl", "seitheb", "frontheb", "lateral", "raise", "fly", "flys", "butterfly",
+        "extension", "strecker", "beuger", "trizeps", "bizeps", "triceps", "biceps", "waden", "calf",
+        "kickback", "face pull", "facepull", "shrug", "abduktor", "adduktor", "abduct", "adduct",
+        "pushdown", "crunch", "reverse", "unterarm", "wrist"]
+    private static let lowerKeys = ["kniebeug", "squat", "kreuzheb", "deadlift", "beinpresse", "leg press",
+        "hip thrust", "hipthrust", "ausfallschritt", "lunge", "rumän", "rdl", "good morning",
+        "hackenschmidt", "glute bridge", "step up", "step-up"]
+
+    /// Ordnet eine Übung grob über ihren Namen ein (Standard: Oberkörper-Grundübung).
+    init(name: String) {
+        let n = name.lowercased()
+        if Self.smallKeys.contains(where: { n.contains($0) }) { self = .small }
+        else if Self.lowerKeys.contains(where: { n.contains($0) }) { self = .lower }
+        else { self = .upper }
+    }
+}
+
+/// Konkreter Erhöhungsvorschlag ausgehend von der letzten Einheit.
+struct IncreaseSuggestion: Equatable {
+    let from: Double
+    let to: Double
+    let delta: Double
+    let pct: Double            // tatsächlicher Sprung relativ zum Arbeitsgewicht
+    let liftClass: LiftClass
+    let surplus: Int           // Wdh, die der schwächste Satz über dem Ziel lag
+    let dataPct: Double        // Reserve laut Epley aus diesem Überschuss
+    /// Schon der kleinste Schritt liegt über der empfohlenen Spanne.
+    var bigStep: Bool { pct > liftClass.hi + 1e-9 }
+
+    /// Wie viele Wdh lag der schwächste Arbeitssatz über seinem Ziel? (≥ 0)
+    static func repSurplus(_ logged: LoggedExercise, targets: [SetTarget]) -> Int {
+        let goals = targets.filter { !$0.isWarmup }
+        let sets = logged.sets.filter { !$0.isWarmup && $0.reps > 0 }
+        guard !goals.isEmpty, !sets.isEmpty else { return 0 }
+        let diffs = sets.enumerated().map { i, s in s.reps - goals[min(i, goals.count - 1)].reps }
+        return max(0, diffs.min() ?? 0)
+    }
+
+    /// Laststeigerung laut Epley, damit die Ziel-Wdh bei gleicher Reserve bleiben.
+    static func epleyLoadPct(targetReps: Int, surplus: Int) -> Double {
+        (1 + Double(targetReps + surplus) / 30) / (1 + Double(targetReps) / 30) - 1
+    }
+
+    /// nil bei Körpergewicht bzw. ohne Schrittweite (→ Wdh steigern statt Gewicht).
+    init?(exercise: Exercise, last: LoggedExercise) {
+        let step = exercise.increment
+        let from = last.topWeight
+        guard step > 0, from > 0 else { return nil }
+        let goals = exercise.targets.filter { !$0.isWarmup }
+        let targetReps = goals.map(\.reps).max() ?? 8
+        let cls = LiftClass(name: exercise.name)
+        let surplus = Self.repSurplus(last, targets: exercise.targets)
+        let dataPct = Self.epleyLoadPct(targetReps: targetReps, surplus: surplus)
+        let pct = min(cls.hi, max(cls.lo, dataPct))
+        // Auf die Schrittweite runden, mindestens ein Schritt, aber nicht über
+        // die Obergrenzen (% und kg) hinaus, wenn das mehr als ein Schritt wäre.
+        let cap = min(from * cls.hi, cls.maxKg) + 1e-9
+        var steps = max(1, Int((from * pct / step).rounded()))
+        while steps > 1 && Double(steps) * step > cap { steps -= 1 }
+        let delta = Double(steps) * step
+        self.from = from
+        self.to = from + delta
+        self.delta = delta
+        self.pct = delta / from
+        self.liftClass = cls
+        self.surplus = surplus
+        self.dataPct = dataPct
+    }
+}
+
+/// Vorschlag plus Bereitschaft: `ready` = Ziel in 2 Einheiten in Folge erreicht
+/// (ACSM/NSCA „2-for-2“), `streak` = wie viele davon (0–2).
+/// `suggestion` ist nil bei Körpergewicht (dann Wdh steigern).
+struct IncreasePlan: Equatable {
+    let suggestion: IncreaseSuggestion?
+    let streak: Int
+    var ready: Bool { streak >= 2 }
+}
+
 // MARK: - Aufwärmsätze (Rampe zum Arbeitsgewicht)
 
 /// Erzeugt Aufwärmsätze (isWarmup) als aufsteigende Rampe zum Arbeitsgewicht.

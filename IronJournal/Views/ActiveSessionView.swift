@@ -37,7 +37,7 @@ struct ActiveSessionView: View {
                         .tint(.orange)
                         .disabled(exercise.topWeight <= 0)
                     } header: {
-                        ExerciseHeader(exercise: exercise)
+                        ExerciseHeader(exercise: exercise, session: session)
                     }
                 }
             }
@@ -63,6 +63,9 @@ struct ActiveSessionView: View {
 private struct ExerciseHeader: View {
     @EnvironmentObject var store: AppStore
     let exercise: LoggedExercise
+    /// Laufende Einheit: Der Status zählt die gerade eingetragenen Sätze mit
+    /// und ändert sich live (z. B. mehr Gewicht → „Fortschritt“).
+    let session: Session
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -70,9 +73,9 @@ private struct ExerciseHeader: View {
                 Text(exercise.name).font(.headline).textCase(nil)
                 Spacer()
                 if let ex = store.exercise(with: exercise.exerciseId) {
-                    let status = store.progressionStatus(for: ex)
+                    let status = store.progressionStatus(for: ex, live: session)
                     if status != .noData {
-                        TappableStatusPill(status: status, exercise: ex)
+                        TappableStatusPill(status: status, exercise: ex, live: session)
                     }
                 }
             }
@@ -94,6 +97,11 @@ private struct ExerciseHeader: View {
                     }
                 }
                 .textCase(nil)
+            }
+            if let ex = store.exercise(with: exercise.exerciseId),
+               let plan = store.increasePlan(for: ex, live: session) {
+                IncreaseSuggestionLine(plan: plan)
+                    .textCase(nil)
             }
         }
     }

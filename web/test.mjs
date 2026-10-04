@@ -6,6 +6,7 @@ import {
   bestWorkingSet, warmupTargets, roundToStep, topWorkingWeight,
   linearTrend, weeklyVolumes, rangeStart, trainingHeatmap, personalRecords,
   workoutStats, WORKOUT_METRICS, sessionStrengthIndex, fmtVolume, fmtMetric, uid,
+  liftClass, epleyLoadPct, suggestIncrease,
 } from "./model.js";
 
 // In-Memory-Storage als localStorage-Ersatz.
@@ -213,6 +214,69 @@ const ex0 = (s) => s.routines[0].exercises[0];
   logSession(s, r, 1000, [[25, 0, true]]);
   logSession(s, r, 2000, [[25, 0, true]]);
   eqs(s.progressionStatus(ex0(s)).kind, "maintaining", "Körpergewicht: kein Gewichtsvorschlag");
+}
+
+// 11b: Live-Status – die laufende Einheit zählt als neueste mit
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[5, 100, true]]);
+  logSession(s, r, 2000, [[5, 95, true]]);
+  logSession(s, r, 3000, [[5, 95, true]]);
+  logSession(s, r, 4000, [[5, 95, true]]);
+  eqs(s.progressionStatus(ex0(s)).kind, "stalled", "gespeichert: stagniert");
+  const live = s.makeSession(r);
+  live.date = new Date(5000_000).toISOString();
+  live.exercises[0].sets = [{ id: "x", reps: 5, weight: 95, isWarmup: false, completed: false }];
+  eqs(s.progressionStatus(ex0(s), live).kind, "stalled", "live gleiches Gewicht → weiter stagniert");
+  live.exercises[0].sets[0].weight = 102.5;
+  const st = s.progressionStatus(ex0(s), live);
+  eqs(st.kind, "progressing", "live mehr Gewicht → Fortschritt statt stagniert");
+  eq(st.delta, epley1RM(102.5, 5) - epley1RM(95, 5), "Delta gegenüber letzter Einheit");
+  eqs(s.progressionStatus(ex0(s)).kind, "stalled", "ohne Live-Einheit unverändert");
+  const cmp = s.progressComparison(ex0(s).id, live);
+  eq(cmp.last.top, 102.5, "Warum-Vergleich nutzt die Live-Einheit");
+  // Bereits gespeicherte Einheit erneut bearbeitet → ersetzt, nicht doppelt gezählt.
+  const saved = s.sessions[0];
+  const edit = JSON.parse(JSON.stringify(saved));
+  edit.exercises[0].sets[0].weight = 102.5;
+  eqs(s.progressionStatus(ex0(s), edit).kind, "progressing", "Live-Fassung ersetzt die gespeicherte");
+}
+
+// 11c: Erhöhungsvorschlag (ACSM 2–10 %, Epley, NSCA-Deckel, Schrittweite)
+{
+  const lg = (reps, weight, n = 3) => ({ sets: Array.from({ length: n }, () => ({ reps, weight, isWarmup: false, completed: true })) });
+  eqs(liftClass("Kniebeugen"), "lower", "Kniebeugen = Unterkörper");
+  eqs(liftClass("Beinstrecker"), "small", "Beinstrecker = Isolation (vor Unterkörper geprüft)");
+  eqs(liftClass("Bankdrücken"), "upper", "Standard = Oberkörper-Grundübung");
+  eq(epleyLoadPct(8, 0), 0, "ohne Extra-Wdh keine Reserve");
+  const bench = exercise("Bankdrücken", [setTarget(8, 60), setTarget(8, 60)], 2.5);
+  eq(suggestIncrease(bench, lg(8, 60)).delta, 2.5, "Bank 60 kg, Ziel genau: +2,5 kg (unterer Rand 2,5 %)");
+  const squat = exercise("Kniebeugen", [setTarget(5, 100)], 2.5);
+  eq(suggestIncrease(squat, lg(5, 100)).delta, 5, "Kniebeuge 100 kg: +5 kg (5 %)");
+  eq(suggestIncrease(squat, lg(9, 100)).delta, 7.5, "viele Extra-Wdh: gedeckelt auf 7,5 kg");
+  const dl = exercise("Kreuzheben", [setTarget(5, 180)], 2.5);
+  eq(suggestIncrease(dl, lg(5, 180)).delta, 7.5, "Kreuzheben 180 kg: NSCA-Deckel 7,5 kg");
+  const curl = exercise("Bizeps Curls", [setTarget(10, 12)], 2);
+  const c = suggestIncrease(curl, lg(10, 12));
+  eq(c.delta, 2, "Curl: mindestens ein Schritt");
+  eq(c.bigStep ? 1 : 0, 1, "Curl 12→14 kg liegt über der Spanne (großer Sprung)");
+  eqs(suggestIncrease(exercise("Liegestütze", [setTarget(20, 0)], 0), lg(20, 0)), null, "Körpergewicht: kein Gewichtsvorschlag");
+
+  // Store: Bereitschaft (2 Einheiten in Folge) + Status/Übernahme nutzen den Betrag
+  const r = routine("Beine", [exercise("Kniebeugen", [setTarget(5, 100)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[5, 100, true]]);
+  let sug = s.increaseSuggestion(ex0(s));
+  eq(sug.streak, 1, "1/2 Einheiten geschafft");
+  eq(sug.ready ? 1 : 0, 0, "noch nicht bereit");
+  logSession(s, r, 2000, [[5, 100, true]]);
+  sug = s.increaseSuggestion(ex0(s));
+  eq(sug.ready ? 1 : 0, 1, "nach 2 Einheiten bereit");
+  const st = s.progressionStatus(ex0(s));
+  eq(st.suggested, 105, "Status schlägt 105 kg vor");
+  s.applySuggestedIncrease(r.id, ex0(s).id);
+  eq(ex0(s).targets[0].weight, 105, "Übernahme erhöht um den Vorschlag (+5 kg)");
 }
 
 // ---------- Verlauf ----------

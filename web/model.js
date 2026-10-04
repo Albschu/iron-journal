@@ -294,6 +294,86 @@ export function hitRepGoals(loggedExercise, targets) {
   return ws.every((s, i) => s.completed && s.reps >= goals[Math.min(i, goals.length - 1)].reps);
 }
 
+// MARK: - Erhöhungsvorschlag (wie viel mehr Gewicht?)
+//
+// Datenbasis (siehe README „Steigerungsvorschlag“):
+// • ACSM Position Stand 2009 (Med Sci Sports Exerc 41:687–708, Evidenz B):
+//   +2–10 % Last, wenn die Ziel-Wdh in zwei Einheiten in Folge geschafft (bzw.
+//   1–2 Wdh übertroffen) werden – kleiner Prozentsatz für kleine, größerer für
+//   große Muskelgruppen.
+// • NSCA (Essentials of S&C, „2-for-2“): Oberkörper ≈ +1–4 kg, Unterkörper
+//   ≈ +2–7 kg je nach Trainingsstand.
+// • Epley (1RM = w·(1 + Wdh/30)): Jede Wdh über dem Ziel ≈ +3 % Reserve – so
+//   skaliert der Vorschlag mit deiner tatsächlichen Leistung.
+// • Plotkin et al. 2022 (PeerJ 10:e14142): Wdh-Steigerung bringt praktisch
+//   gleich viel wie Last-Steigerung → ist der kleinste Gewichtssprung zu groß,
+//   lieber erst Wdh steigern (Doppelprogression).
+
+/// Übungsklassen mit Steigerungsspanne (Anteil vom Arbeitsgewicht, ACSM) und
+/// absoluter Obergrenze je Sprung (maxKg, an NSCA angelehnt).
+export const LIFT_CLASSES = {
+  lower: { label: "Unterkörper-Grundübung", lo: 0.05, hi: 0.10, maxKg: 7.5 },
+  upper: { label: "Oberkörper-Grundübung", lo: 0.025, hi: 0.05, maxKg: 5 },
+  small: { label: "Isolationsübung", lo: 0.02, hi: 0.05, maxKg: 2.5 },
+};
+
+const SMALL_KEYS = ["curl", "seitheb", "frontheb", "lateral", "raise", "fly", "flys", "butterfly",
+  "extension", "strecker", "beuger", "trizeps", "bizeps", "triceps", "biceps", "waden", "calf",
+  "kickback", "face pull", "facepull", "shrug", "abduktor", "adduktor", "abduct", "adduct",
+  "pushdown", "crunch", "reverse", "unterarm", "wrist"];
+const LOWER_KEYS = ["kniebeug", "squat", "kreuzheb", "deadlift", "beinpresse", "leg press",
+  "hip thrust", "hipthrust", "ausfallschritt", "lunge", "rumän", "rdl", "good morning",
+  "hackenschmidt", "glute bridge", "step up", "step-up"];
+
+/// Ordnet eine Übung grob über ihren Namen ein (Standard: Oberkörper-Grundübung).
+export function liftClass(name = "") {
+  const n = name.toLowerCase();
+  if (SMALL_KEYS.some((k) => n.includes(k))) return "small";
+  if (LOWER_KEYS.some((k) => n.includes(k))) return "lower";
+  return "upper";
+}
+
+/// Wie viele Wdh lag der schwächste Arbeitssatz über seinem Ziel? (≥ 0)
+export function repSurplus(loggedExercise, targets) {
+  const goals = targets.filter((t) => !t.isWarmup);
+  const ws = workingSets(loggedExercise.sets).filter((s) => s.reps > 0);
+  if (!goals.length || !ws.length) return 0;
+  return Math.max(0, Math.min(...ws.map((s, i) => s.reps - goals[Math.min(i, goals.length - 1)].reps)));
+}
+
+/// Laststeigerung laut Epley, damit die Ziel-Wdh bei gleicher Reserve bleiben:
+/// (1 + (Ziel + Überschuss)/30) / (1 + Ziel/30) − 1.
+export function epleyLoadPct(targetReps, surplus) {
+  return (1 + (targetReps + surplus) / 30) / (1 + targetReps / 30) - 1;
+}
+
+/// Konkreter Vorschlag ausgehend von der letzten Einheit.
+/// Liefert { from, to, delta, pct, cls, surplus, dataPct, bigStep } oder null
+/// (Körpergewicht bzw. keine Schrittweite → Wdh steigern statt Gewicht).
+export function suggestIncrease(ex, lastLogged) {
+  const step = ex.increment;
+  const from = exerciseTopWeight(lastLogged);
+  if (!(step > 0) || !(from > 0)) return null;
+  const goals = ex.targets.filter((t) => !t.isWarmup);
+  const targetReps = goals.length ? Math.max(...goals.map((t) => t.reps)) : 8;
+  const cls = liftClass(ex.name);
+  const { lo, hi, maxKg } = LIFT_CLASSES[cls];
+  const surplus = repSurplus(lastLogged, ex.targets);
+  const dataPct = epleyLoadPct(targetReps, surplus);
+  const pct = Math.min(hi, Math.max(lo, dataPct));
+  // Auf die Schrittweite runden, mindestens ein Schritt, aber nicht über die
+  // Obergrenzen (% und kg) hinaus, wenn das mehr als ein Schritt wäre.
+  const cap = Math.min(from * hi, maxKg) + 1e-9;
+  let steps = Math.max(1, Math.round((from * pct) / step));
+  while (steps > 1 && steps * step > cap) steps--;
+  const delta = steps * step;
+  return {
+    from, to: from + delta, delta, pct: delta / from, cls, surplus, dataPct,
+    // Schon der kleinste Schritt liegt über der empfohlenen Spanne.
+    targetReps, bigStep: delta / from > hi + 1e-9,
+  };
+}
+
 // MARK: - Store
 
 export class Store {
@@ -396,20 +476,36 @@ export class Store {
     return h.length ? h[h.length - 1] : null;
   }
 
+  /// Verlauf inkl. einer laufenden (noch nicht gespeicherten) Einheit: Die
+  /// Live-Einheit ersetzt ggf. ihre bereits gespeicherte Fassung (gleiche ID)
+  /// und zählt als neueste Einheit – so spiegelt der Status live wider, was
+  /// gerade eingetragen ist (z. B. mehr Gewicht → „Fortschritt“).
+  _historyWithLive(exerciseId, liveSession) {
+    const h = this.history(exerciseId);
+    const logged = liveSession?.exercises.find((e) => e.exerciseId === exerciseId);
+    if (!logged || !workingSets(logged.sets).length) return h;
+    return [...h.filter((e) => e.id !== liveSession.id),
+      { id: liveSession.id, date: liveSession.date, logged }];
+  }
+
   /// Prüft, ob sich der Nutzer bei einer Übung selbst steigert, und leitet
   /// daraus einen Status mit Handlungsempfehlung ab. Erhöht NICHTS automatisch.
   /// Liefert { kind, ... } mit kind ∈
   /// noData | progressing | maintaining | readyToIncrease | stalled | deloadSuggested.
-  progressionStatus(ex) {
-    const entries = this.history(ex.id);
+  /// liveSession (optional): laufende Einheit, die als neueste mitzählt.
+  progressionStatus(ex, liveSession = null) {
+    const entries = this._historyWithLive(ex.id, liveSession);
     if (entries.length === 0) return { kind: "noData" };
     const last = entries[entries.length - 1];
 
     // 1) Bereit für mehr Gewicht? Ziel-Wdh in den letzten zwei Einheiten erreicht.
     if (ex.increment > 0 && entries.length >= 2 &&
         entries.slice(-2).every((e) => metAllTargets(e.logged, ex.targets))) {
+      const sug = suggestIncrease(ex, last.logged);
       const base = (ex.targets.find((t) => !t.isWarmup)?.weight) ?? exerciseTopWeight(last.logged);
-      return { kind: "readyToIncrease", suggested: base + ex.increment };
+      return sug
+        ? { kind: "readyToIncrease", suggested: sug.to, delta: sug.delta, pct: sug.pct }
+        : { kind: "readyToIncrease", suggested: base + ex.increment, delta: ex.increment, pct: 0 };
     }
 
     // 2) Festgefahren? Wie viele Einheiten ist der letzte Bestwert her?
@@ -426,10 +522,30 @@ export class Store {
     return delta > 0.01 ? { kind: "progressing", delta } : { kind: "maintaining" };
   }
 
+  /// Erhöhungsvorschlag inkl. Bereitschaft: ready = Ziel in 2 Einheiten in
+  /// Folge erreicht (ACSM/NSCA „2-for-2“), streak = wie viele davon (0–2).
+  /// null ohne Verlauf; { ready, streak, bodyweight: true } ohne Gewicht/Schritt.
+  increaseSuggestion(ex, liveSession = null) {
+    const entries = this._historyWithLive(ex.id, liveSession);
+    if (!entries.length) return null;
+    // Eine laufende Einheit, die das Ziel (noch) nicht erfüllt, unterbricht die
+    // Serie nicht – sie ist ja noch nicht fertig.
+    const last = entries[entries.length - 1];
+    const pending = liveSession && last.id === liveSession.id && !metAllTargets(last.logged, ex.targets);
+    let streak = 0;
+    for (let i = entries.length - (pending ? 2 : 1); i >= 0 && streak < 2; i--) {
+      if (!metAllTargets(entries[i].logged, ex.targets)) break;
+      streak++;
+    }
+    const sug = suggestIncrease(ex, entries[entries.length - 1].logged);
+    if (!sug) return { ready: false, streak, bodyweight: true };
+    return { ...sug, ready: streak >= 2, streak };
+  }
+
   /// Kennzahlen der letzten beiden Einheiten einer Übung – Datenbasis für die
   /// „Warum?“-Erklärung hinter der Status-Pille. null bei < 2 Einheiten.
-  progressComparison(exerciseId) {
-    const h = this.history(exerciseId);
+  progressComparison(exerciseId, liveSession = null) {
+    const h = this._historyWithLive(exerciseId, liveSession);
     if (h.length < 2) return null;
     const metrics = (e) => {
       const ws = workingSets(e.logged.sets);
@@ -454,7 +570,10 @@ export class Store {
     if (!rt) return;
     const ex = rt.exercises.find((e) => e.id === exerciseId);
     if (!ex || ex.increment <= 0) return;
-    for (const t of ex.targets) if (!t.isWarmup) t.weight += ex.increment;
+    // Datengestützter Sprung (siehe suggestIncrease); sonst eine Schrittweite.
+    const st = this.progressionStatus(ex);
+    const delta = st.kind === "readyToIncrease" ? st.delta : ex.increment;
+    for (const t of ex.targets) if (!t.isWarmup) t.weight += delta;
     this._save();
   }
 
