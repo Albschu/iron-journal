@@ -20,6 +20,15 @@ enum Fmt {
         return nf.string(from: value as NSNumber) ?? "\(value)"
     }
 
+    /// Anteil als Prozent mit max. einer Nachkommastelle: 0.091 → "9,1 %".
+    static func percent(_ fraction: Double) -> String {
+        let nf = NumberFormatter()
+        nf.locale = Locale(identifier: "de_DE")
+        nf.minimumFractionDigits = 0
+        nf.maximumFractionDigits = 1
+        return (nf.string(from: (fraction * 100) as NSNumber) ?? "\(fraction * 100)") + " %"
+    }
+
     /// Zahl ohne unnötige Nachkommastellen und ohne Einheit (für Deltas/Metriken).
     static func number(_ value: Double) -> String {
         let nf = NumberFormatter()

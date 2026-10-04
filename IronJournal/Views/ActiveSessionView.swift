@@ -98,6 +98,11 @@ private struct ExerciseHeader: View {
                 }
                 .textCase(nil)
             }
+            if let ex = store.exercise(with: exercise.exerciseId),
+               let plan = store.increasePlan(for: ex, live: session) {
+                IncreaseSuggestionLine(plan: plan)
+                    .textCase(nil)
+            }
         }
     }
 }

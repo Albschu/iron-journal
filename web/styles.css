@@ -103,6 +103,10 @@ button { font: inherit; color: inherit; }
 .why-row:last-child { border-bottom: none; }
 .why-l { color: var(--muted); font-size: 13px; flex: none; }
 .why-m { margin-left: auto; white-space: nowrap; }
+/* Begründungszeilen des Erhöhungsvorschlags: Fließtext statt Kennzahl */
+.why-row.wrap { align-items: flex-start; }
+.why-row.wrap .why-l { flex: 0 0 88px; }
+.why-row.wrap .why-m { margin-left: 0; white-space: normal; flex: 1; min-width: 0; line-height: 1.45; }
 .why-d { flex: none; min-width: 58px; text-align: right; font-weight: 700; font-size: 12px;
   white-space: nowrap; }
 .why-d.up { color: var(--green); }
@@ -191,6 +195,10 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Wrapper der Status-Pille in der laufenden Einheit (wird live ersetzt) */
 .ex-head .pill-slot { display: contents; }
+/* Erhöhungsvorschlag unter der Übung (live) */
+.sugg { margin: -2px 16px 6px; font-size: 13px; line-height: 1.4; color: var(--muted); }
+.sugg:empty { display: none; }
+.sugg b { color: var(--green); }
 
 /* Erledigte Sätze */
 .setrow.done { background: rgba(61, 220, 151, 0.055); }

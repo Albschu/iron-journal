@@ -4,7 +4,7 @@ import {
   topTargetWeight, workingSets, best1RM, linearTrend,
   warmupTargets, topWorkingWeight,
   rangeStart, trainingHeatmap, personalRecords,
-  workoutStats, WORKOUT_METRICS,
+  workoutStats, WORKOUT_METRICS, LIFT_CLASSES,
   fmtWeight, fmtWeightShort, fmtDate, fmtMetric,
 } from "./model.js";
 
@@ -67,7 +67,7 @@ function statusDetail(st) {
     case "maintaining":
       return "Gehalten – kein klarer Fortschritt. Versuch nächstes Mal +1 Wiederholung.";
     case "readyToIncrease":
-      return `Ziel-Wiederholungen zweimal erreicht. Zeit für mehr Gewicht: ${fmtWeight(st.suggested)}.`;
+      return `Ziel-Wiederholungen zweimal erreicht. Zeit für mehr Gewicht: +${fmtWeightShort(st.delta)} kg → ${fmtWeight(st.suggested)}${st.pct ? ` (+${pctTxt(st.pct)})` : ""}.`;
     case "stalled":
       return `Seit ${st.sessions} Einheiten kein neuer Bestwert. Variiere Wdh/Tempo oder leg einen Deload ein.`;
     case "deloadSuggested":
@@ -75,6 +75,49 @@ function statusDetail(st) {
     default:
       return "";
   }
+}
+
+// ---------- Erhöhungsvorschlag (wie viel mehr Gewicht?) ----------
+function pctTxt(p) { return `${nf.format(p * 100)} %`; }
+
+// Kurze Zeile unter der Übung in der laufenden Einheit (live).
+function suggestionLine(sug) {
+  if (!sug) return "";
+  if (sug.bodyweight) {
+    return sug.ready ? `💡 Ziel 2× geschafft – steigere die Wiederholungen (+1 je Satz).` : "";
+  }
+  const amount = `+${fmtWeightShort(sug.delta)} kg → ${fmtWeight(sug.to)} (+${pctTxt(sug.pct)})`;
+  if (sug.ready) {
+    return `💡 Nächstes Mal: <b>${amount}</b>` +
+      (sug.bigStep ? ` · großer Sprung – alternativ erst +1–2 Wdh` : "");
+  }
+  return `💡 Nächste Erhöhung: ${amount}, sobald alle Sätze ihre Ziel-Wdh schaffen (${sug.streak}/2 Einheiten)`;
+}
+
+// Ausführliche Begründung im „Warum?“-Dialog.
+function suggestionSection(ex, live = null) {
+  const sug = store.increaseSuggestion(ex, live);
+  if (!sug || sug.bodyweight) return "";
+  const cls = LIFT_CLASSES[sug.cls];
+  const range = `${pctTxt(cls.lo)}–${pctTxt(cls.hi)}, max. ${fmtWeightShort(cls.maxKg)} kg`;
+  const surplusTxt = sug.surplus > 0
+    ? `Dein schwächster Satz lag ${sug.surplus} Wdh über dem Ziel – nach Epley entspricht das ≈ +${pctTxt(sug.dataPct)} Reserve.`
+    : `Du hast das Ziel genau erreicht (keine Extra-Wdh) – daher der untere Rand der Spanne.`;
+  const when = sug.ready
+    ? `Ziel in 2 Einheiten in Folge erreicht → jetzt erhöhen.`
+    : `Erst erhöhen, wenn alle Arbeitssätze in 2 Einheiten in Folge die Ziel-Wdh schaffen (aktuell ${sug.streak}/2).`;
+  return `<div class="section-title">Vorschlag: ${sug.ready ? "jetzt" : "nächste"} Erhöhung</div>
+    <div class="card">
+      <div class="why-head">+${fmtWeightShort(sug.delta)} kg → ${fmtWeight(sug.to)} (+${pctTxt(sug.pct)})</div>
+      <div class="why-row wrap"><span class="why-l">Wann</span><span class="why-m">${when}</span></div>
+      <div class="why-row wrap"><span class="why-l">Spanne</span><span class="why-m">${esc(cls.label)}: ${range}</span></div>
+      <div class="why-row wrap"><span class="why-l">Deine Daten</span><span class="why-m">${surplusTxt}</span></div>
+      ${sug.bigStep ? `<div class="why-row wrap"><span class="why-l">Hinweis</span><span class="why-m">Schon der kleinste Schritt (${fmtWeightShort(sug.delta)} kg = ${pctTxt(sug.pct)}) liegt über der Spanne. Alternativ erst die Wdh um 1–2 steigern (Doppelprogression) – das wirkt laut Studien ähnlich gut.</span></div>` : ""}
+    </div>
+    <div class="why-note">Grundlage: ACSM Position Stand 2009 (+2–10 %, sobald die Ziel-Wdh in zwei Einheiten in Folge
+      geschafft werden; kleinere Sprünge für kleine Muskelgruppen), NSCA „2-for-2“-Regel (Oberkörper ≈ +1–4 kg,
+      Unterkörper ≈ +2–7 kg), Plotkin et al. 2022 (Wdh- und Laststeigerung ähnlich wirksam). Gerundet auf die
+      Schrittweite der Übung.</div>`;
 }
 
 // ---------- „Warum?“ – was hat sich zur vorletzten Einheit verändert? ----------
@@ -158,7 +201,7 @@ function openWhy(routineId, exerciseId, live = null) {
   const statusCard = `<div class="card"><div class="row" style="border:none;cursor:default">
     <span class="grow"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st)}</div>
       <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div></div>`;
-  openModal(`Warum „${label}“?`, statusCard + whySection(exerciseId, live), { single: true });
+  openModal(`Warum „${label}“?`, statusCard + suggestionSection(ex, live) + whySection(exerciseId, live), { single: true });
 }
 
 // Inline-SVGs für leere Zustände (statt system-abhängiger Emojis)
@@ -801,6 +844,8 @@ function openSession(session, resumed = false) {
     // Status-Pille live nachziehen – ohne Neuaufbau, damit der Fokus im Feld bleibt.
     const slot = body.querySelector(`[data-pill-ex="${inp.dataset.ex}"]`);
     if (slot) slot.innerHTML = sessionPill(session, +inp.dataset.ex);
+    const sugg = body.querySelector(`[data-sugg-ex="${inp.dataset.ex}"]`);
+    if (sugg) sugg.innerHTML = sessionSuggestion(session, +inp.dataset.ex);
   });
   body.addEventListener("click", (e) => {
     const why = e.target.closest("[data-why-e]");
@@ -864,6 +909,12 @@ function sessionPill(session, ei) {
   return rtEx ? statusPill(store.progressionStatus(rtEx, session), { r: session.routineId, e: rtEx.id }) : "";
 }
 
+// Erhöhungsvorschlag einer Übung der laufenden Einheit (live).
+function sessionSuggestion(session, ei) {
+  const rtEx = routineExercise(session, ei);
+  return rtEx ? suggestionLine(store.increaseSuggestion(rtEx, session)) : "";
+}
+
 function sessionBody(session) {
   return session.exercises.map((ex, ei) => {
     const last = store.lastSession(ex.exerciseId);
@@ -886,6 +937,7 @@ function sessionBody(session) {
     const linked = !!rtEx;
     const note = rtEx?.note?.trim();
     const pill = `<span class="pill-slot" data-pill-ex="${ei}">${sessionPill(session, ei)}</span>`;
+    const sugg = `<div class="sugg" data-sugg-ex="${ei}">${sessionSuggestion(session, ei)}</div>`;
     const inc = rtEx ? store.autoIncrement(rtEx) : 0;
     const incTxt = inc > 0
       ? ` <span class="auto-up">↑ automatisch +${fmtWeightShort(inc)} kg</span>` : "";
@@ -893,6 +945,7 @@ function sessionBody(session) {
         ${linked ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}</div>
       ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ""}
       ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}${incTxt}</div>` : ""}
+      ${sugg}
       <div class="modal-grp" style="margin-top:4px">${sets}
         <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button>
           <span class="spacer"></span>
@@ -990,6 +1043,7 @@ function openProgress(routineId, exerciseId) {
     return `<div class="section-title">Aktuelle Vorgabe</div>
       <div class="card">${targetsHtml}${statusBlock}${applyBtn}${rmHtml}
         <div class="setrow"><button class="btn-text" id="adjust">⚙ Arbeitsgewicht anpassen</button></div></div>
+      ${suggestionSection(ex)}
       ${hist.length >= 2 ? whySection(exerciseId) : ""}
       ${charts}${table}`;
   }

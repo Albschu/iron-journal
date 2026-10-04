@@ -62,6 +62,11 @@ struct ExerciseProgressView: View {
                 }
             }
 
+            // Wie viel erhöhen? Datengestützter Vorschlag mit Begründung.
+            if let plan = store.increasePlan(for: current) {
+                IncreaseSuggestionSection(plan: plan)
+            }
+
             // Warum dieser Status? Vergleich der letzten zwei Einheiten.
             if let cmp = store.progressComparison(for: exercise.id) {
                 ProgressComparisonSection(comparison: cmp)

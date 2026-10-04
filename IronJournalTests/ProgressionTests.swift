@@ -317,6 +317,61 @@ final class ProgressionTests: XCTestCase {
         XCTAssertEqual(weight(of: store), 0, accuracy: 0.0001)
     }
 
+    // MARK: - Erhöhungsvorschlag (ACSM 2–10 %, Epley, NSCA-Deckel, Schrittweite)
+
+    private func logged(_ reps: Int, _ weight: Double, sets n: Int = 3) -> LoggedExercise {
+        LoggedExercise(exerciseId: UUID(), name: "x",
+                       sets: (0..<n).map { _ in LoggedSet(reps: reps, weight: weight, completed: true) })
+    }
+
+    func testLiftClassFromName() {
+        XCTAssertEqual(LiftClass(name: "Kniebeugen"), .lower)
+        XCTAssertEqual(LiftClass(name: "Beinstrecker"), .small, "Isolation wird vor Unterkörper geprüft")
+        XCTAssertEqual(LiftClass(name: "Bankdrücken"), .upper)
+    }
+
+    func testIncreaseSuggestionAmounts() {
+        let bench = Exercise(name: "Bankdrücken", targets: [SetTarget(reps: 8, weight: 60)], increment: 2.5)
+        XCTAssertEqual(IncreaseSuggestion(exercise: bench, last: logged(8, 60))?.delta, 2.5)
+
+        let squat = Exercise(name: "Kniebeugen", targets: [SetTarget(reps: 5, weight: 100)], increment: 2.5)
+        XCTAssertEqual(IncreaseSuggestion(exercise: squat, last: logged(5, 100))?.delta, 5, "5 % bei 100 kg")
+        XCTAssertEqual(IncreaseSuggestion(exercise: squat, last: logged(9, 100))?.delta, 7.5, "NSCA-Deckel")
+
+        let deadlift = Exercise(name: "Kreuzheben", targets: [SetTarget(reps: 5, weight: 180)], increment: 2.5)
+        XCTAssertEqual(IncreaseSuggestion(exercise: deadlift, last: logged(5, 180))?.delta, 7.5)
+
+        let curl = Exercise(name: "Bizeps Curls", targets: [SetTarget(reps: 10, weight: 12)], increment: 2)
+        let c = IncreaseSuggestion(exercise: curl, last: logged(10, 12))
+        XCTAssertEqual(c?.delta, 2, "mindestens ein Schritt")
+        XCTAssertEqual(c?.bigStep, true)
+
+        let pushup = Exercise(name: "Liegestütze", targets: [SetTarget(reps: 20, weight: 0)], increment: 0)
+        XCTAssertNil(IncreaseSuggestion(exercise: pushup, last: logged(20, 0)))
+    }
+
+    func testIncreasePlanReadinessAndApply() {
+        let routine = Routine(name: "Beine", exercises: [
+            Exercise(name: "Kniebeugen", targets: [SetTarget(reps: 5, weight: 100)], increment: 2.5)
+        ])
+        let store = makeStore([routine])
+        logSession(store, routine: routine, secondsSinceEpoch: 1_000, sets: [(5, 100, true)])
+        XCTAssertEqual(store.increasePlan(for: exercise(store))?.streak, 1)
+        XCTAssertEqual(store.increasePlan(for: exercise(store))?.ready, false)
+
+        // Laufende, noch nicht abgehakte Einheit unterbricht die Serie nicht.
+        var live = store.makeSession(from: routine)
+        live.date = Date(timeIntervalSince1970: 1_500)
+        XCTAssertEqual(store.increasePlan(for: exercise(store), live: live)?.streak, 1)
+
+        logSession(store, routine: routine, secondsSinceEpoch: 2_000, sets: [(5, 100, true)])
+        XCTAssertEqual(store.increasePlan(for: exercise(store))?.ready, true)
+        XCTAssertEqual(store.progressionStatus(for: exercise(store)), .readyToIncrease(suggested: 105))
+
+        store.applySuggestedIncrease(routineId: store.routines[0].id, exerciseId: exercise(store).id)
+        XCTAssertEqual(weight(of: store), 105, accuracy: 0.0001, "Übernahme erhöht um den Vorschlag")
+    }
+
     // MARK: - Manuelles Setzen
 
     func testSetTargetWeightOnlyAffectsWorkingSets() {
