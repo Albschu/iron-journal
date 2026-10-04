@@ -22,12 +22,39 @@ jobs:
       - name: Xcode-Version anzeigen
         run: xcodebuild -version
 
+      # Feste Gerätenamen („iPhone 16“) verschwinden mit Runner-Updates – daher
+      # das erste verfügbare iPhone nehmen und notfalls die iOS-Runtime laden.
+      - name: iPhone-Simulator wählen
+        id: sim
+        run: |
+          pick() {
+            xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devs = json.load(sys.stdin)["devices"]
+          ids = [d["udid"] for rt, ds in sorted(devs.items(), reverse=True) if "iOS" in rt
+                 for d in ds if d["name"].startswith("iPhone")]
+          print(ids[0] if ids else "")'
+          }
+          ID=$(pick)
+          if [ -z "$ID" ]; then
+            echo "Kein iPhone-Simulator vorhanden – lade iOS-Runtime …"
+            xcodebuild -downloadPlatform iOS
+            ID=$(pick)
+          fi
+          if [ -z "$ID" ]; then
+            RT=$(xcrun simctl list runtimes available | grep -o 'com.apple.CoreSimulator.SimRuntime.iOS[^ ]*' | tail -1)
+            DT=$(xcrun simctl list devicetypes | grep -o 'com.apple.CoreSimulator.SimDeviceType.iPhone[^)]*' | tail -1)
+            ID=$(xcrun simctl create "CI iPhone" "$DT" "$RT")
+          fi
+          xcrun simctl list devices | grep "$ID"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
       - name: Build & Test (iOS Simulator)
         run: |
           xcodebuild \
             -project IronJournal.xcodeproj \
             -scheme IronJournal \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination 'id=${{ steps.sim.outputs.id }}' \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             test
