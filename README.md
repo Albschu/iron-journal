@@ -32,7 +32,12 @@ Die App entscheidet selbst und füllt jedes Training passend vor (**Doppelprogre
 | Deload vorgemerkt / Gewicht von Hand festgelegt | −10 % bzw. dein Gewicht, danach wieder automatisch |
 | Körpergewicht | immer +1 Wdh je Satz |
 
-Die **Wdh-Spanne** stellst du je Übung im Workout-Editor ein. Ohne eigene Einstellung gilt die häufigste Ziel-Wdh als Untergrenze und +4 als Obergrenze (z. B. 8–12). Der Gewichtsschritt ist die Schrittweite der Übung.
+Die **Wdh-Spanne** stellst du je Übung im Workout-Editor ein. Ohne eigene Einstellung gilt die häufigste Ziel-Wdh als Untergrenze und +4 als Obergrenze (z. B. 8–12). Passen deine tatsächlich gemachten Wdh nicht dazu (alte Vorgaben aus Notizen), schreibt die App einmalig eine Spanne aus deinem Verlauf fest (Median der letzten 3 Einheiten, z. B. Facepulls 8–12 statt 15–19). Der Gewichtsschritt ist die Schrittweite der Übung.
+
+Weitere Regeln aus echten Daten:
+- **Satzzahl** = wie viele Sätze du zuletzt üblicherweise gemacht hast (Maximum der letzten 3 Einheiten), nicht die Vorgabe.
+- **Pause über 3 Wochen:** kein „Stagniert“ oder „Deload“, sondern „Neustart“ – Kraftverlust nach einer Pause ist normal; ab hier wird neu verglichen.
+- **Gerätewechsel** (Arbeitsgewicht mehr als halbiert oder verdoppelt): ebenfalls „Neustart“, der Vergleich läuft nur noch mit dem neuen Gewicht.
 
 Warum so: Der Sprung ist immer der kleinstmögliche und kommt erst, wenn du an der Obergrenze Reserve hast. Wer 12 Wdh schafft, schafft 8 Wdh mit einem Schritt mehr sicher (Epley: 12 Wdh ≈ 140 % der Last, 8 Wdh ≈ 127 %).
 

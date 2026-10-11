@@ -61,12 +61,13 @@ const STATUS_META = {
   maintaining:     { label: "Gehalten",        cls: "hold" },
   readyToIncrease: { label: "Nächstes Mal mehr", cls: "ready" },
   tooHeavy:        { label: "Etwas zu schwer", cls: "stall" },
+  fresh:           { label: "Neustart",        cls: "hold" },
   stalled:         { label: "Stagniert",       cls: "stall" },
   deloadSuggested: { label: "Deload sinnvoll", cls: "deload" },
   deloadPlanned:   { label: "Deload geplant",  cls: "deload" },
   deloaded:        { label: "Nach Deload",     cls: "hold" },
 };
-const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, tooHeavy: 2, readyToIncrease: 3, deloadPlanned: 4, deloaded: 5, maintaining: 6, progressing: 7, noData: 8 };
+const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, tooHeavy: 2, readyToIncrease: 3, deloadPlanned: 4, deloaded: 5, fresh: 6, maintaining: 7, progressing: 8, noData: 9 };
 
 // ids = { r: routineId, e: exerciseId } macht die Pille antippbar:
 // ein Tipp öffnet die „Warum?“-Erklärung (Vergleich der letzten zwei Einheiten).
@@ -89,6 +90,10 @@ function statusDetail(st) {
       return "Gleich stark wie zuletzt – nächstes Mal +1 Wdh je Satz.";
     case "readyToIncrease":
       return `Obergrenze in allen Sätzen geschafft – nächstes Mal automatisch ${fmtWeight(st.suggested)}.`;
+    case "fresh":
+      return st.reason === "gap"
+        ? "Wiedereinstieg nach über 3 Wochen Pause – weniger Kraft ist normal. Ab hier wird neu verglichen."
+        : "Neues Gerät bzw. anderes Gewicht – ab hier wird neu verglichen.";
     case "tooHeavy":
       return `Zweimal unter der Wdh-Spanne – nächstes Mal automatisch ${fmtWeight(st.suggested)}.`;
     case "stalled":
