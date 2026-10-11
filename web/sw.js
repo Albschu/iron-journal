@@ -2,9 +2,9 @@
 // WICHTIG: Bei jeder Änderung an app.js/model.js/styles.css/index.html die
 // Version hochzählen, sonst liefert die installierte PWA die alten Dateien
 // (Assets sind cache-first).
-const CACHE = "ironjournal-v13";
+const CACHE = "ironjournal-v14";
 const ASSETS = [
-  "./", "./index.html", "./styles.css", "./app.js", "./model.js",
+  "./", "./index.html", "./styles.css", "./app.js", "./model.js", "./sync.js",
   "./manifest.webmanifest",
   "./icons/icon-180.png", "./icons/icon-192.png", "./icons/icon-512.png",
 ];
@@ -23,6 +23,8 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
+  // Fremde Hosts (GitHub-API für den Gist-Sync) nie aus dem Cache bedienen.
+  if (new URL(e.request.url).origin !== self.location.origin) return;
   // Navigationen: network-first, damit Updates sofort ankommen; offline aus dem Cache.
   if (e.request.mode === "navigate") {
     e.respondWith(

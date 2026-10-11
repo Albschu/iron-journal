@@ -1,10 +1,11 @@
 // model.js – reine Daten + Logik (kein DOM). Läuft im Browser und in Node.
-// Portiert aus der nativen iOS-App (Models.swift / AppStore.swift / SeedData.swift).
+// Ursprünglich aus der (inzwischen entfernten) nativen iOS-App portiert.
 
 export const STORAGE_KEYS = {
   routines: "ironjournal.routines",
   sessions: "ironjournal.sessions",
   draft: "ironjournal.draft",
+  settings: "ironjournal.settings",
 };
 
 export function uid() {
@@ -13,6 +14,9 @@ export function uid() {
 }
 
 // MARK: - Konstruktoren (entsprechen den Swift-Structs)
+
+/// Deload: Arbeitsgewichte der nächsten Einheit auf 90 %.
+export const DELOAD_FACTOR = 0.9;
 
 export function setTarget(reps, weight, isWarmup = false) {
   return { id: uid(), reps, weight, isWarmup };
@@ -374,6 +378,113 @@ export function suggestIncrease(ex, lastLogged) {
   };
 }
 
+// MARK: - Pausenzeit je Übungsart
+//
+// Grundübungen brauchen mehr Erholung zwischen den Sätzen als Isolations-
+// übungen: Längere Pausen (≈ 3 min) bringen bei Mehrgelenksübungen mehr Kraft-
+// und Muskelzuwachs als 1 min (Schoenfeld et al., J Strength Cond Res
+// 30(7):1805–1812, 2016); für kleine Muskelgruppen reichen 60–90 s
+// (NSCA, Essentials of S&C). Einordnung wie beim Steigerungsvorschlag.
+export const REST_SECONDS = { lower: 180, upper: 150, small: 90 };
+
+export function restSeconds(name = "") {
+  return REST_SECONDS[liftClass(name)];
+}
+
+// MARK: - Rotation & Wochenziel
+
+/// Nächstes Workout der festen Rotation: das auf die zuletzt trainierte
+/// Routine folgende (zyklisch). Ohne Verlauf bzw. wenn die letzte Routine
+/// gelöscht wurde, die erste mit Übungen. null ohne Routinen.
+export function nextRoutine(routines, sessions) {
+  const usable = routines.filter((r) => r.exercises.length);
+  if (!usable.length) return null;
+  const last = sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date))
+    .find((s) => usable.some((r) => r.id === s.routineId));
+  if (!last) return usable[0];
+  const i = usable.findIndex((r) => r.id === last.routineId);
+  return usable[(i + 1) % usable.length];
+}
+
+function mondayOf(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d;
+}
+
+/// Wochenziel: Einheiten diese Woche und Serie = wie viele Wochen in Folge das
+/// Ziel erreicht wurde. Die laufende Woche zählt erst mit, wenn das Ziel schon
+/// erreicht ist – eine noch offene Woche bricht die Serie nicht.
+export function weekGoalStatus(sessions, goal = 3, now = new Date()) {
+  const counts = new Map();
+  for (const s of sessions) {
+    const k = +mondayOf(s.date);
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const thisMon = mondayOf(now);
+  const thisWeek = counts.get(+thisMon) ?? 0;
+  let streak = thisWeek >= goal ? 1 : 0;
+  const d = new Date(thisMon);
+  for (;;) {
+    d.setDate(d.getDate() - 7);
+    if ((counts.get(+d) ?? 0) >= goal) streak++;
+    else break;
+  }
+  return { thisWeek, goal, streak, met: thisWeek >= goal };
+}
+
+// MARK: - Zusammenfassung nach dem Training
+
+/// Kennzahlen einer (noch nicht gespeicherten) Einheit plus Vergleich zur
+/// letzten Einheit desselben Workouts und neue Bestwerte (e1RM) je Übung.
+export function sessionSummary(store, session, now = new Date()) {
+  const start = new Date(session.date);
+  const end = session.endDate ? new Date(session.endDate) : now;
+  const done = (e) => workingSets(e.sets).filter((s) => s.completed);
+  const vol = session.exercises.reduce((sum, e) =>
+    sum + done(e).reduce((n, s) => n + s.reps * s.weight, 0), 0);
+  const setsDone = session.exercises.reduce((n, e) => n + done(e).length, 0);
+  const setsOpen = session.exercises.reduce((n, e) =>
+    n + workingSets(e.sets).filter((s) => !s.completed).length, 0);
+
+  const prev = store.sessions
+    .filter((s) => s.id !== session.id && s.routineId === session.routineId &&
+      new Date(s.date) < start)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))[0] ?? null;
+
+  const prs = [];
+  for (const e of session.exercises) {
+    const sets = done(e);
+    if (!sets.length) continue;
+    const cur = best1RM({ sets });
+    const before = store.history(e.exerciseId)
+      .filter((h) => h.id !== session.id && new Date(h.date) < start)
+      .map((h) => best1RM(h.logged));
+    if (before.length && cur > Math.max(...before) + 0.01) {
+      prs.push({ name: e.name, e1rm: cur, prev: Math.max(...before) });
+    }
+  }
+  return {
+    duration: Math.max(0, Math.round((end - start) / 1000)),
+    volume: vol, setsDone, setsOpen, prs,
+    prev: prev && {
+      date: prev.date,
+      volume: sessionVolume(prev),
+      duration: prev.endDate ? Math.round((new Date(prev.endDate) - new Date(prev.date)) / 1000) : null,
+    },
+  };
+}
+
+/// Offene Arbeitssätze vor dem Speichern klären: "drop" verwirft sie,
+/// "complete" hakt sie ab. Aufwärmsätze bleiben unberührt.
+export function resolveOpenSets(session, mode) {
+  for (const e of session.exercises) {
+    if (mode === "drop") e.sets = e.sets.filter((s) => s.isWarmup || s.completed);
+    else for (const s of e.sets) if (!s.isWarmup) s.completed = true;
+  }
+}
+
 // MARK: - Store
 
 export class Store {
@@ -383,6 +494,7 @@ export class Store {
     const s = this._load(STORAGE_KEYS.sessions);
     this.routines = r ?? seedRoutines();
     this.sessions = s ?? [];
+    this.onChange = null;   // Hook für den Gist-Sync (wird nach jedem Speichern gerufen)
     if (!r || !s) this._save();
   }
 
@@ -398,6 +510,17 @@ export class Store {
   _save() {
     this.storage.setItem(STORAGE_KEYS.routines, JSON.stringify(this.routines));
     this.storage.setItem(STORAGE_KEYS.sessions, JSON.stringify(this.sessions));
+    if (this.onChange) this.onChange();
+  }
+
+  // -- Einstellungen (Wochenziel, Gist-Sync) – bewusst NICHT im Backup,
+  //    damit das GitHub-Token nie in einem Gist landet --
+  get settings() {
+    return { weekGoal: 3, ...(this._load(STORAGE_KEYS.settings) ?? {}) };
+  }
+
+  updateSettings(patch) {
+    this.storage.setItem(STORAGE_KEYS.settings, JSON.stringify({ ...this.settings, ...patch }));
   }
 
   // Eine neue Einheit aus einer Routine: vorbefüllt mit den zuletzt
@@ -409,45 +532,89 @@ export class Store {
       routineId: rt.id,
       routineName: rt.name,
       date: new Date().toISOString(),
-      exercises: rt.exercises.map((ex) => ({
-        id: uid(),
-        exerciseId: ex.id,
-        name: ex.name,
-        sets: this._prefillSets(ex),
-      })),
+      note: "",
+      tags: [],
+      exercises: rt.exercises.map((ex) => this.makeLoggedExercise(ex)),
     };
+  }
+
+  /// Geloggte Übung mit Vorbefüllung (auch zum Tauschen/Hinzufügen im Training).
+  makeLoggedExercise(ex) {
+    const logged = { id: uid(), exerciseId: ex.id, name: ex.name, sets: this._prefillSets(ex) };
+    if (ex.deloadNext) logged.deload = true;
+    return logged;
+  }
+
+  /// Ad-hoc-Übung nur für diese Einheit (nicht in einem Workout hinterlegt).
+  makeAdhocExercise(name) {
+    return { id: uid(), exerciseId: uid(), name, adhoc: true,
+      sets: [{ id: uid(), reps: 8, weight: 0, isWarmup: false, completed: false }] };
+  }
+
+  /// Alle Übungen aller Workouts (für die Tausch-Auswahl).
+  exercise(id) {
+    for (const r of this.routines) {
+      const ex = r.exercises.find((e) => e.id === id);
+      if (ex) return ex;
+    }
+    return null;
   }
 
   /// Automatische Steigerung für die Vorbefüllung: die Schrittweite der
   /// Übung, wenn beim letzten Mal alle Arbeitssätze mit den
   /// Ziel-Wiederholungen abgehakt wurden – sonst 0.
   autoIncrement(ex) {
-    if (!ex || ex.increment <= 0) return 0;
+    if (!ex || ex.increment <= 0 || ex.deloadNext) return 0;
     const last = this.lastSession(ex.id);
-    return last && hitRepGoals(last.logged, ex.targets) ? ex.increment : 0;
+    return last && !last.logged.deload && hitRepGoals(last.logged, ex.targets) ? ex.increment : 0;
   }
 
   _prefillSets(ex) {
-    const last = this.lastSession(ex.id);
-    if (!last) {
-      return ex.targets.map((t) => ({
-        id: uid(), reps: t.reps, weight: t.weight, isWarmup: t.isWarmup, completed: false,
-      }));
+    // Nach einem Deload geht es mit den Gewichten von davor weiter.
+    const h = this.history(ex.id);
+    const last = h.at(-1)?.logged.deload ? (h.findLast((e) => !e.logged.deload) ?? h.at(-1)) : h.at(-1);
+    const sets = last
+      ? last.logged.sets.map((s) => ({ reps: s.reps, weight: s.weight, isWarmup: s.isWarmup }))
+      : ex.targets.map((t) => ({ reps: t.reps, weight: t.weight, isWarmup: t.isWarmup }));
+    // Wurden letztes Mal Sätze ausgelassen (offene Sätze verworfen), fällt die
+    // Satzzahl trotzdem nie unter die Vorgabe – fehlende kommen mit dem
+    // letzten Arbeitsgewicht dazu.
+    if (last) {
+      const goals = ex.targets.filter((t) => !t.isWarmup);
+      const work = sets.filter((s) => !s.isWarmup);
+      for (const t of goals.slice(work.length))
+        sets.push({ reps: t.reps, weight: work.at(-1)?.weight ?? t.weight, isWarmup: false });
     }
-    const inc = this.autoIncrement(ex);
-    return last.logged.sets.map((s) => ({
+    const inc = last ? this.autoIncrement(ex) : 0;
+    const step = ex.increment > 0 ? ex.increment : 2.5;
+    return sets.map((s) => ({
       id: uid(),
       reps: s.reps,
-      weight: s.isWarmup ? s.weight : s.weight + inc,
+      weight: s.isWarmup ? s.weight
+        : ex.deloadNext ? roundToStep(s.weight * DELOAD_FACTOR, step) : s.weight + inc,
       isWarmup: s.isWarmup,
       completed: false,
     }));
+  }
+
+  // -- Deload per Tipp: nächste Einheit der Übung mit −10 % --
+  scheduleDeload(exerciseId, on = true) {
+    const ex = this.exercise(exerciseId);
+    if (!ex) return;
+    if (on) ex.deloadNext = true; else delete ex.deloadNext;
+    this._save();
   }
 
   saveSession(session) {
     const idx = this.sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) this.sessions[idx] = session;
     else this.sessions.unshift(session);
+    // Absolvierter Deload → Vormerkung an der Übung erledigt.
+    for (const e of session.exercises) {
+      if (!e.deload) continue;
+      const ex = this.exercise(e.exerciseId);
+      if (ex) delete ex.deloadNext;
+    }
     // Bewusst KEINE automatische Gewichtserhöhung mehr: Der Tracker prüft den
     // Fortschritt (progressionStatus) und schlägt vor – erhöhen tut der Nutzer
     // selbst über applySuggestedIncrease.
@@ -465,7 +632,9 @@ export class Store {
       .slice()
       .sort((a, b) => new Date(a.date) - new Date(b.date))
       .map((s) => {
-        const logged = s.exercises.find((e) => e.exerciseId === exerciseId);
+        // Übersprungene Übungen (keine Arbeitssätze) zählen nicht als Einheit –
+        // sonst würden sie als „kein Fortschritt“ in die Stagnation eingehen.
+        const logged = s.exercises.find((e) => e.exerciseId === exerciseId && workingSets(e.sets).length);
         return logged ? { id: s.id, date: s.date, logged } : null;
       })
       .filter(Boolean);
@@ -482,8 +651,8 @@ export class Store {
   /// gerade eingetragen ist (z. B. mehr Gewicht → „Fortschritt“).
   _historyWithLive(exerciseId, liveSession) {
     const h = this.history(exerciseId);
-    const logged = liveSession?.exercises.find((e) => e.exerciseId === exerciseId);
-    if (!logged || !workingSets(logged.sets).length) return h;
+    const logged = liveSession?.exercises.find((e) => e.exerciseId === exerciseId && workingSets(e.sets).length);
+    if (!logged) return h;
     return [...h.filter((e) => e.id !== liveSession.id),
       { id: liveSession.id, date: liveSession.date, logged }];
   }
@@ -494,7 +663,12 @@ export class Store {
   /// noData | progressing | maintaining | readyToIncrease | stalled | deloadSuggested.
   /// liveSession (optional): laufende Einheit, die als neueste mitzählt.
   progressionStatus(ex, liveSession = null) {
-    const entries = this._historyWithLive(ex.id, liveSession);
+    const all = this._historyWithLive(ex.id, liveSession);
+    if (ex.deloadNext && !(all.at(-1)?.logged.deload)) return { kind: "deloadPlanned" };
+    // Nach einem Deload beginnt die Bewertung frisch.
+    const dl = all.findLastIndex((e) => e.logged.deload);
+    if (dl >= 0 && dl === all.length - 1) return { kind: "deloaded" };
+    const entries = dl >= 0 ? all.slice(dl + 1) : all;
     if (entries.length === 0) return { kind: "noData" };
     const last = entries[entries.length - 1];
 

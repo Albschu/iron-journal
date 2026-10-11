@@ -1,17 +1,23 @@
 # Iron Journal 🏋️
 
-Minimalistische iOS-App (SwiftUI) zum Tracking von Krafttraining – als Ersatz für die Notizen-App. Workouts auswählen, Sätze (Wdh × Gewicht) abhaken, Verlauf und Fortschritt im Dashboard sehen, mit automatischer **Progressive-Overload**-Logik.
+Minimalistische Web-App (PWA) zum Tracking von Krafttraining – als Ersatz für die Notizen-App. In Safari öffnen → *Teilen → Zum Home-Bildschirm*, dann läuft sie wie eine native App, auch offline.
+
+**URL:** https://albschu.github.io/iron-journal/
 
 ## Funktionen
 
-- **Training** – Vordefinierte Workouts (Push, Rücken, Zuhause). Antippen startet eine Einheit; Sätze sind mit der letzten Einheit vorbefüllt (Ist-Werte statt statischer Vorgaben) – einfach öffnen und loslegen, ohne nachzudenken. Wdh & Gewicht eintragen, Satz abhaken, fertig.
-- **Verlauf** – Jede abgeschlossene Einheit mit Datum, Volumen und allen Sätzen.
-- **Dashboard** – Pro Übung Top-Gewicht- und Volumen-Charts über die Zeit, tabellarischer Verlauf und Steigerungs-Status.
-- **Progressive Overload** – Wenn in der letzten Einheit alle Arbeitssätze mit den Ziel-Wiederholungen abgehakt waren, wird das Arbeitsgewicht beim nächsten Start automatisch um die eingestellte Schrittweite erhöht (pro Übung konfigurierbar, z. B. 2,5 kg an der Hantel, 1,25 kg am Block). Gewichte lassen sich jederzeit auch manuell anpassen.
-- **Steigerungsvorschlag** – Pro Übung zeigt die App live im Training, *wie viel* du erhöhen solltest (z. B. „+5 kg → 105 kg (+5 %)“) und *wann*: erst wenn alle Arbeitssätze in zwei Einheiten in Folge die Ziel-Wdh schaffen. Der Status („Stagniert“, „Fortschritt“ …) zählt die gerade eingetragenen Sätze schon mit.
-- **Eigene Workouts** – Workouts und Übungen frei anlegen, bearbeiten und löschen. Aufwärmsätze werden markiert und von der Progression ausgenommen.
+- **Training** – Oben steht groß das Workout, das in der Rotation **als Nächstes dran** ist (Push → Rücken → …), darüber das **Wochenziel** mit Serie („2/3 diese Woche · 🔥 6 Wochen in Folge“). Sätze sind mit der letzten Einheit vorbefüllt.
+- **Abhaken = fertig** – Stimmen die Werte, reicht ein Tipp auf den Kreis. Weicht etwas ab, öffnet ein Tipp auf „8 × 25 kg“ einen **großen Ziffernblock** mit ± Schrittweite und „✓ Abhaken“. Danach springt die Ansicht zum nächsten offenen Satz.
+- **Pausen-Timer nach Übungsart** – Startet beim Abhaken: Unterkörper-Grundübung 3:00, Oberkörper-Grundübung 2:30, Isolation 1:30 (Schoenfeld et al. 2016, NSCA). Bildschirm bleibt an, Ton/Vibration bei Ablauf.
+- **Flexibler Ablauf** – Über „⋯“ an jeder Übung: **später machen** (ans Ende), **tauschen** (gegen eine Übung aus einem anderen Workout oder eine neue „nur heute“) oder **überspringen**. Übersprungene Übungen zählen nicht als Stagnation. „＋ Übung hinzufügen“ am Ende.
+- **Tagesform** – Schnell-Chips („😴 Schlecht geschlafen“, „💪 Top fit“ …) plus freie Notiz pro Einheit. Landen im Backup (`session.tags`, `session.note`) – gedacht für eine regelmäßige externe KI-Auswertung.
+- **Zusammenfassung** – Nach „Fertig“: Dauer, Sätze, Volumen, neue Bestwerte ★ und Vergleich zur letzten Einheit desselben Workouts. Nicht abgehakte Sätze: verwerfen oder als erledigt zählen.
+- **Verlauf** – Jede Einheit mit Dauer und Tagesform; vergangene Einheiten lassen sich **bearbeiten** (Sätze, Datum). Löschen mit **Rückgängig**.
+- **Steigerung & Dashboard** – Status je Übung („Stagniert“, „Bereit für mehr“ …) mit „Warum?“-Erklärung, datengestützter Erhöhungsvorschlag, Charts, Heatmap, Bestwerte.
+- **Deload per Tipp** – Bei „Stagniert“/„Deload sinnvoll“: nächste Einheit mit −10 %, danach geht es mit dem Gewicht von davor weiter und die Bewertung beginnt frisch.
+- **Automatisches Backup** – Nach jeder Änderung still in ein **privates GitHub-Gist** (Dashboard → Daten → Automatisches Backup; einmalig ein Token nur mit Recht „gist“). GitHub hebt jede Fassung als Revision auf; auf einem neuen Gerät Token eintragen → Backup wird gefunden und wiederhergestellt. Manueller JSON-Export/-Import bleibt.
 
-Alle Daten bleiben lokal auf dem Gerät (JSON im Documents-Ordner). Keine Accounts, kein Netzwerk.
+Alle Daten liegen lokal im Browser (localStorage); einziger Netzwerkzugriff ist der optionale Gist-Sync.
 
 ## Steigerungsvorschlag – Datenbasis
 
@@ -27,35 +33,15 @@ Umsetzung: Die Übung wird über ihren Namen eingeordnet (Unterkörper-Grundübu
 ## Aufbau
 
 ```
-IronJournal/
-├── IronJournalApp.swift     App-Einstieg + Tab-Navigation
-├── Models.swift             Datenmodelle (Routine, Exercise, Session …)
-├── AppStore.swift           Store, Persistenz & Progressive-Overload-Logik
-├── SeedData.swift           Start-Workouts (aus den Notizen)
-├── Formatting.swift         Zahlen-/Datumsformatierung (de_DE)
-├── Assets.xcassets          App-Icon-Platzhalter & Akzentfarbe
-└── Views/
-    ├── WorkoutListView.swift       Workout-Liste / Einstieg
-    ├── ActiveSessionView.swift     Tracking einer Einheit
-    ├── RoutineEditView.swift       Workouts & Übungen bearbeiten
-    ├── HistoryView.swift           Verlauf
-    ├── DashboardView.swift         Übersicht je Übung
-    └── ExerciseProgressView.swift  Charts + Gewichtssteuerung
+web/
+├── index.html            App-Shell + Tab-Leiste
+├── app.js                UI: Tabs, Training, Ziffernblock, Zusammenfassung, Charts
+├── model.js              Daten + Logik (Progression, Deload, Rotation, Wochenziel …), DOM-frei
+├── sync.js               Automatisches Backup ins GitHub-Gist
+├── styles.css
+├── sw.js                 Service Worker (offline; Version bei jeder Änderung hochzählen!)
+├── manifest.webmanifest
+└── test.mjs              Logik-Tests:  node web/test.mjs
 ```
 
-## Bauen & Installieren
-
-Voraussetzung: **Mac mit Xcode 16+** (die Charts brauchen iOS 16+).
-
-1. `IronJournal.xcodeproj` in Xcode öffnen.
-2. Unter *Signing & Capabilities* dein **Apple-ID-Team** auswählen (für einen lokalen Build auf dem eigenen iPhone reicht ein kostenloser Account; die App läuft dann 7 Tage bis zum nächsten Re-Sign).
-3. Bei Bedarf die Bundle-ID `com.albschu.IronJournal` auf etwas Eindeutiges anpassen.
-4. iPhone anschließen, als Ziel wählen, ▶︎ Run.
-
-### App Store
-
-Für eine Veröffentlichung im App Store ist eine Mitgliedschaft im **Apple Developer Program** (99 $/Jahr) nötig: in Xcode *Product → Archive*, dann über den Organizer nach App Store Connect hochladen und zur Review einreichen.
-
-## Hinweis
-
-Das Projekt wurde unter Linux geschrieben und konnte dort nicht kompiliert werden – der erste Build muss auf einem Mac erfolgen. Sollte Xcode beim Öffnen eine Schema-Migration anbieten, einfach bestätigen.
+Deploy: Jeder Push auf `main`, der `web/` ändert, geht per GitHub Actions auf GitHub Pages.

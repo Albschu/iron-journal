@@ -1,5 +1,5 @@
 // Node-Tests für den portierten Progressive-Overload-Tracker
-// (entspricht ProgressionTests.swift). Ausführen:  node web/test.mjs
+// Ausführen:  node web/test.mjs
 import {
   Store, routine, exercise, setTarget,
   exerciseVolume, exerciseTopWeight, epley1RM, best1RM, progressSignal,
@@ -7,6 +7,7 @@ import {
   linearTrend, weeklyVolumes, rangeStart, trainingHeatmap, personalRecords,
   workoutStats, WORKOUT_METRICS, sessionStrengthIndex, fmtVolume, fmtMetric, uid,
   liftClass, epleyLoadPct, suggestIncrease,
+  restSeconds, nextRoutine, weekGoalStatus, sessionSummary, resolveOpenSets,
 } from "./model.js";
 
 // In-Memory-Storage als localStorage-Ersatz.
@@ -538,6 +539,107 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eqs(fmtVolume(12500), "12,5 t", "großes Volumen kompakt in Tonnen");
   eqs(fmtVolume(700), "700 kg", "kleines Volumen in kg");
   eqs(fmtMetric(3, WORKOUT_METRICS.sets), "3", "Sätze ohne Einheit");
+}
+
+// ---------- Quality-of-Life ----------
+// Pausenzeit nach Übungsart
+{
+  eq(restSeconds("Kniebeuge"), 180, "Unterkörper-Grundübung: 3 min Pause");
+  eq(restSeconds("Brustpresse"), 150, "Oberkörper-Grundübung: 2:30 Pause");
+  eq(restSeconds("Seitheben"), 90, "Isolationsübung: 90 s Pause");
+}
+// Rotation: nächstes Workout
+{
+  const a = routine("Push", [exercise("A", [setTarget(8, 10)])]);
+  const b = routine("Rücken", [exercise("B", [setTarget(8, 10)])]);
+  const leer = routine("Leer", []);
+  const s = freshStore([a, b, leer]);
+  eqs(nextRoutine(s.routines, s.sessions).name, "Push", "ohne Verlauf: erstes Workout");
+  logSession(s, a, 1000, [[8, 10, true]]);
+  eqs(nextRoutine(s.routines, s.sessions).name, "Rücken", "nach Push folgt Rücken");
+  const ses = s.makeSession(b); ses.date = new Date(2000).toISOString(); s.saveSession(ses);
+  eqs(nextRoutine(s.routines, s.sessions).name, "Push", "Rotation zyklisch, leere Workouts übersprungen");
+}
+// Wochenziel & Serie
+{
+  const now = new Date(2026, 9, 14, 12); // Mi
+  const at = (y, m, d) => ({ id: uid(), date: new Date(y, m, d, 10).toISOString(), exercises: [] });
+  const sessions = [
+    at(2026, 9, 12), at(2026, 9, 13),                     // diese Woche: 2
+    at(2026, 9, 5), at(2026, 9, 7), at(2026, 9, 9),      // letzte Woche: 3
+    at(2026, 8, 29), at(2026, 8, 30), at(2026, 9, 2),    // vorletzte: 3
+    at(2026, 8, 22),                                     // davor: 1 → Serie endet
+  ];
+  const g = weekGoalStatus(sessions, 3, now);
+  eq(g.thisWeek, 2, "2 Einheiten diese Woche");
+  eq(g.streak, 2, "offene Woche bricht die Serie nicht: 2 Wochen");
+  sessions.push(at(2026, 9, 14));
+  eq(weekGoalStatus(sessions, 3, now).streak, 3, "Ziel diese Woche erreicht → zählt mit");
+}
+// Übersprungene Übung zählt nicht in den Verlauf
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[8, 20, true]]);
+  const ses = s.makeSession(r); ses.date = new Date(2000).toISOString();
+  ses.exercises[0].sets = []; ses.exercises[0].skipped = true;
+  s.saveSession(ses);
+  eq(s.history(ex0(s).id).length, 1, "übersprungene Übung erzeugt keinen Verlaufseintrag");
+}
+// Ausgelassene Sätze: Vorbefüllung fällt nicht unter die Vorgabe
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20), setTarget(8, 20), setTarget(6, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[8, 25, true]]);   // nur 1 von 3 Sätzen gemacht
+  const next = s.makeSession(r);
+  eq(next.exercises[0].sets.length, 3, "fehlende Sätze aus der Vorgabe ergänzt");
+  eq(next.exercises[0].sets[2].weight, 25, "mit dem letzten Arbeitsgewicht");
+  eq(next.exercises[0].sets[2].reps, 6, "mit den Ziel-Wdh der Vorgabe");
+}
+// Deload per Tipp
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(5, 100)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[5, 100, true]]);
+  for (let i = 1; i <= 5; i++) logSession(s, r, 1000 + i * 1000, [[5, 95, true]]);
+  eqs(s.progressionStatus(ex0(s)).kind, "deloadSuggested", "Ausgangslage: Deload sinnvoll");
+  s.scheduleDeload(ex0(s).id);
+  eqs(s.progressionStatus(ex0(s)).kind, "deloadPlanned", "Deload vorgemerkt");
+  const dl = s.makeSession(r);
+  eq(dl.exercises[0].sets[0].weight, 85, "Deload: 95 kg × 0,9 = 85,5 → auf 2,5 gerundet 85");
+  eqs(dl.exercises[0].deload, true, "geloggte Übung als Deload markiert");
+  dl.date = new Date(9000).toISOString(); completeAllWorking(dl); s.saveSession(dl);
+  eqs(ex0(s).deloadNext, undefined, "Vormerkung nach dem Speichern erledigt");
+  eqs(s.progressionStatus(ex0(s)).kind, "deloaded", "nach dem Deload: frischer Start");
+  const after = s.makeSession(r);
+  eq(after.exercises[0].sets[0].weight, 95, "danach geht es mit dem Gewicht von vor dem Deload weiter");
+  eq(s.autoIncrement(ex0(s)), 0, "keine Auto-Steigerung direkt nach dem Deload");
+  s.scheduleDeload(ex0(s).id); s.scheduleDeload(ex0(s).id, false);
+  eqs(ex0(s).deloadNext, undefined, "Deload-Vormerkung zurücknehmbar");
+}
+// Zusammenfassung + offene Sätze
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20), setTarget(8, 20)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[8, 20, true], [8, 20, true]]);
+  const ses = s.makeSession(r);
+  ses.date = new Date(100000).toISOString();
+  ses.endDate = new Date(100000 + 45 * 60000).toISOString();
+  ses.exercises[0].sets = [
+    { id: "a", reps: 8, weight: 25, isWarmup: false, completed: true },
+    { id: "b", reps: 8, weight: 25, isWarmup: false, completed: false },
+  ];
+  const sum = sessionSummary(s, ses);
+  eq(sum.duration, 45 * 60, "Dauer aus Start/Ende");
+  eq(sum.volume, 200, "Volumen zählt nur abgehakte Sätze");
+  eq(sum.setsOpen, 1, "ein offener Satz");
+  eq(sum.prs.length, 1, "neuer Bestwert erkannt");
+  eq(sum.prev.volume, 320, "Vergleich zur letzten Einheit desselben Workouts");
+  const copy = structuredClone(ses);
+  resolveOpenSets(copy, "drop");
+  eq(copy.exercises[0].sets.length, 1, "offene Sätze verwerfen");
+  resolveOpenSets(ses, "complete");
+  eqs(ses.exercises[0].sets[1].completed, true, "offene Sätze abhaken");
 }
 
 console.log(`\n${pass} Tests bestanden, ${fail} fehlgeschlagen`);
