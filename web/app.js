@@ -4,11 +4,24 @@ import {
   topTargetWeight, workingSets, best1RM, linearTrend,
   warmupTargets, topWorkingWeight,
   rangeStart, trainingHeatmap, personalRecords,
-  workoutStats, WORKOUT_METRICS, LIFT_CLASSES,
+  workoutStats, WORKOUT_METRICS, repRange,
+  restSeconds, nextRoutine, weekGoalStatus, sessionSummary, resolveOpenSets,
   fmtWeight, fmtWeightShort, fmtDate, fmtMetric,
 } from "./model.js";
+import { createSync } from "./sync.js";
 
 const store = new Store(window.localStorage);
+// Automatisches Backup ins GitHub-Gist (falls verbunden): jede gespeicherte
+// Änderung löst einen Upload aus. Status-Text im Dashboard live nachziehen.
+const sync = createSync(store, () => {
+  for (const id of ["sync-status", "gist-status"]) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = syncStatusText();
+  }
+});
+store.onChange = () => sync.markChanged();
+// Browser bitten, die Daten nicht bei Speicherknappheit zu löschen.
+try { navigator.storage?.persist?.(); } catch { /* egal */ }
 const screen = document.getElementById("screen");
 const modalRoot = document.getElementById("modal-root");
 let activeTab = "training";
@@ -30,6 +43,11 @@ function relDate(iso) {
   return fmtDate(iso);
 }
 
+function fmtDuration(secs) {
+  const m = Math.round(secs / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
+}
+
 function fmtClock(totalSecs) {
   const m = Math.floor(totalSecs / 60), s = totalSecs % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
@@ -41,11 +59,14 @@ const STATUS_META = {
   noData:          { label: "Keine Daten",     cls: "" },
   progressing:     { label: "Fortschritt",     cls: "prog" },
   maintaining:     { label: "Gehalten",        cls: "hold" },
-  readyToIncrease: { label: "Bereit für mehr", cls: "ready" },
+  readyToIncrease: { label: "Nächstes Mal mehr", cls: "ready" },
+  tooHeavy:        { label: "Etwas zu schwer", cls: "stall" },
   stalled:         { label: "Stagniert",       cls: "stall" },
   deloadSuggested: { label: "Deload sinnvoll", cls: "deload" },
+  deloadPlanned:   { label: "Deload geplant",  cls: "deload" },
+  deloaded:        { label: "Nach Deload",     cls: "hold" },
 };
-const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, readyToIncrease: 2, maintaining: 3, progressing: 4, noData: 5 };
+const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, tooHeavy: 2, readyToIncrease: 3, deloadPlanned: 4, deloaded: 5, maintaining: 6, progressing: 7, noData: 8 };
 
 // ids = { r: routineId, e: exerciseId } macht die Pille antippbar:
 // ein Tipp öffnet die „Warum?“-Erklärung (Vergleich der letzten zwei Einheiten).
@@ -65,59 +86,67 @@ function statusDetail(st) {
         ? `Stärker als zuletzt (+${fmtWeight(st.delta)} e1RM). Weiter so 💪`
         : "Basis erfasst – ab jetzt zählt jede Steigerung.";
     case "maintaining":
-      return "Gehalten – kein klarer Fortschritt. Versuch nächstes Mal +1 Wiederholung.";
+      return "Gleich stark wie zuletzt – nächstes Mal +1 Wdh je Satz.";
     case "readyToIncrease":
-      return `Ziel-Wiederholungen zweimal erreicht. Zeit für mehr Gewicht: +${fmtWeightShort(st.delta)} kg → ${fmtWeight(st.suggested)}${st.pct ? ` (+${pctTxt(st.pct)})` : ""}.`;
+      return `Obergrenze in allen Sätzen geschafft – nächstes Mal automatisch ${fmtWeight(st.suggested)}.`;
+    case "tooHeavy":
+      return `Zweimal unter der Wdh-Spanne – nächstes Mal automatisch ${fmtWeight(st.suggested)}.`;
     case "stalled":
       return `Seit ${st.sessions} Einheiten kein neuer Bestwert. Variiere Wdh/Tempo oder leg einen Deload ein.`;
     case "deloadSuggested":
-      return `Seit ${st.sessions} Einheiten festgefahren. Plane eine leichtere Woche (~50 % Volumen) und greif dann frisch an.`;
+      return `Seit ${st.sessions} Einheiten festgefahren. Plane einen Deload (−10 % für eine Einheit) und greif dann frisch an.`;
+    case "deloadPlanned":
+      return "Nächste Einheit mit −10 % Gewicht – danach geht es mit dem alten Gewicht weiter.";
+    case "deloaded":
+      return "Deload erledigt. Jetzt mit dem Gewicht von davor frisch angreifen.";
     default:
       return "";
   }
 }
 
-// ---------- Erhöhungsvorschlag (wie viel mehr Gewicht?) ----------
-function pctTxt(p) { return `${nf.format(p * 100)} %`; }
+// ---------- Steigerung: Doppelprogression (wann und wie viel?) ----------
+// Die App entscheidet selbst (store.plan) und füllt das Training so vor.
+// Hier nur die Anzeige: eine Zeile im Training, eine Karte in den Details.
 
-// Kurze Zeile unter der Übung in der laufenden Einheit (live).
-function suggestionLine(sug) {
-  if (!sug) return "";
-  if (sug.bodyweight) {
-    return sug.ready ? `💡 Ziel 2× geschafft – steigere die Wiederholungen (+1 je Satz).` : "";
+// Eine Zeile unter der Übung im Training – die einzige Ansage.
+function planLine(p, when = "Heute") {
+  const { min, max } = p.range;
+  const kg = (v) => fmtWeight(v);
+  const stepTxt = `${fmtWeightShort(p.step)} kg`;
+  switch (p.kind) {
+    case "start": return `🎯 Erstes Mal: Gewicht so wählen, dass ${min}–${max} Wdh sauber gehen`;
+    case "up":    return `<b class="up">⬆ ${when} +${stepTxt} → ${kg(p.to)}</b> · Ziel ${min} Wdh`;
+    case "down":  return `<b class="down">⬇ ${when} −${stepTxt} → ${kg(p.to)}</b> · Ziel ${min} Wdh`;
+    case "deload": return `<b class="down">⤵ Deload ${when.toLowerCase()}: ${kg(p.to)}</b>`;
+    case "manual": return `<b>✎ ${when} ${kg(p.to)}</b> (von dir festgelegt)`;
+    default:
+      return p.bodyweight
+        ? `→ Ziel: +1 Wdh je Satz`
+        : `→ Gewicht halten · +1 Wdh je Satz · bei ${max} in allen: +${stepTxt}`;
   }
-  const amount = `+${fmtWeightShort(sug.delta)} kg → ${fmtWeight(sug.to)} (+${pctTxt(sug.pct)})`;
-  if (sug.ready) {
-    return `💡 Nächstes Mal: <b>${amount}</b>` +
-      (sug.bigStep ? ` · großer Sprung – alternativ erst +1–2 Wdh` : "");
-  }
-  return `💡 Nächste Erhöhung: ${amount}, sobald alle Sätze ihre Ziel-Wdh schaffen (${sug.streak}/2 Einheiten)`;
 }
 
-// Ausführliche Begründung im „Warum?“-Dialog.
-function suggestionSection(ex, live = null) {
-  const sug = store.increaseSuggestion(ex, live);
-  if (!sug || sug.bodyweight) return "";
-  const cls = LIFT_CLASSES[sug.cls];
-  const range = `${pctTxt(cls.lo)}–${pctTxt(cls.hi)}, max. ${fmtWeightShort(cls.maxKg)} kg`;
-  const surplusTxt = sug.surplus > 0
-    ? `Dein schwächster Satz lag ${sug.surplus} Wdh über dem Ziel – nach Epley entspricht das ≈ +${pctTxt(sug.dataPct)} Reserve.`
-    : `Du hast das Ziel genau erreicht (keine Extra-Wdh) – daher der untere Rand der Spanne.`;
-  const when = sug.ready
-    ? `Ziel in 2 Einheiten in Folge erreicht → jetzt erhöhen.`
-    : `Erst erhöhen, wenn alle Arbeitssätze in 2 Einheiten in Folge die Ziel-Wdh schaffen (aktuell ${sug.streak}/2).`;
-  return `<div class="section-title">Vorschlag: ${sug.ready ? "jetzt" : "nächste"} Erhöhung</div>
+// Karte „Nächstes Training“ für Details und „Warum?“: Ansage + Regel.
+function planSection(ex) {
+  const p = store.plan(ex);
+  const { min, max } = p.range;
+  const why = {
+    start: "Noch kein Verlauf – die Vorgaben gelten.",
+    up: `Letztes Mal alle Sätze mit ${max}+ Wdh geschafft. Bei einem Schritt mehr sind ${min} Wdh sicher drin.`,
+    down: `Zweimal in Folge meist unter ${min} Wdh – ein Schritt zurück, dann wieder hocharbeiten.`,
+    deload: "Vorgemerkter Deload: einmal −10 %, danach mit dem alten Gewicht weiter.",
+    manual: "Von dir festgelegt – gilt für das nächste Training, danach entscheidet wieder die App.",
+    reps: p.bodyweight ? "Körpergewicht: Fortschritt über Wiederholungen."
+      : `Noch nicht alle Sätze bei ${max} Wdh – erst Wiederholungen sammeln.`,
+  }[p.kind];
+  return `<div class="section-title">Nächstes Training</div>
     <div class="card">
-      <div class="why-head">+${fmtWeightShort(sug.delta)} kg → ${fmtWeight(sug.to)} (+${pctTxt(sug.pct)})</div>
-      <div class="why-row wrap"><span class="why-l">Wann</span><span class="why-m">${when}</span></div>
-      <div class="why-row wrap"><span class="why-l">Spanne</span><span class="why-m">${esc(cls.label)}: ${range}</span></div>
-      <div class="why-row wrap"><span class="why-l">Deine Daten</span><span class="why-m">${surplusTxt}</span></div>
-      ${sug.bigStep ? `<div class="why-row wrap"><span class="why-l">Hinweis</span><span class="why-m">Schon der kleinste Schritt (${fmtWeightShort(sug.delta)} kg = ${pctTxt(sug.pct)}) liegt über der Spanne. Alternativ erst die Wdh um 1–2 steigern (Doppelprogression) – das wirkt laut Studien ähnlich gut.</span></div>` : ""}
-    </div>
-    <div class="why-note">Grundlage: ACSM Position Stand 2009 (+2–10 %, sobald die Ziel-Wdh in zwei Einheiten in Folge
-      geschafft werden; kleinere Sprünge für kleine Muskelgruppen), NSCA „2-for-2“-Regel (Oberkörper ≈ +1–4 kg,
-      Unterkörper ≈ +2–7 kg), Plotkin et al. 2022 (Wdh- und Laststeigerung ähnlich wirksam). Gerundet auf die
-      Schrittweite der Übung.</div>`;
+      <div class="why-head plan">${planLine(p, "Nächstes Mal")}</div>
+      <div class="why-row wrap"><span class="why-l">Warum</span><span class="why-m">${esc(why)}</span></div>
+      ${p.bodyweight ? "" : `<div class="why-row wrap"><span class="why-l">Regel</span><span class="why-m">Spanne ${min}–${max} Wdh.
+        Gleiches Gewicht, jedes Mal +1 Wdh. Alle Sätze bei ${max} → +${fmtWeightShort(p.step || 2.5)} kg und zurück auf ${min}.
+        Zweimal unter ${min} → ein Schritt zurück.</span></div>`}
+    </div>`;
 }
 
 // ---------- „Warum?“ – was hat sich zur vorletzten Einheit verändert? ----------
@@ -193,15 +222,14 @@ function whySection(exerciseId, live = null) {
 // Modal hinter der antippbaren Status-Pille.
 // live: laufende Einheit → Status/Vergleich inkl. der gerade eingetragenen Sätze.
 function openWhy(routineId, exerciseId, live = null) {
-  const r = store.routines.find((x) => x.id === routineId);
-  const ex = r?.exercises.find((x) => x.id === exerciseId);
+  const ex = store.exercise(exerciseId);
   if (!ex) return;
   const st = store.progressionStatus(ex, live);
   const label = STATUS_META[st.kind]?.label ?? "Status";
   const statusCard = `<div class="card"><div class="row" style="border:none;cursor:default">
     <span class="grow"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st)}</div>
       <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div></div>`;
-  openModal(`Warum „${label}“?`, statusCard + suggestionSection(ex, live) + whySection(exerciseId, live), { single: true });
+  openModal(`Warum „${label}“?`, statusCard + planSection(ex) + whySection(exerciseId, live), { single: true });
 }
 
 // Inline-SVGs für leere Zustände (statt system-abhängiger Emojis)
@@ -245,6 +273,24 @@ function renderTraining() {
       </button>
     </div>` : "";
 
+  // „Als Nächstes dran“ (feste Rotation) + Wochenziel.
+  const next = nextRoutine(store.routines, store.sessions);
+  const goal = weekGoalStatus(store.sessions, store.settings.weekGoal);
+  const dots = Array.from({ length: goal.goal }, (_, i) =>
+    `<span class="gdot ${i < goal.thisWeek ? "on" : ""}"></span>`).join("");
+  const goalHtml = `<div class="goal">
+      <span class="gdots">${dots}</span>
+      <span class="gtxt">${goal.thisWeek}/${goal.goal} diese Woche${goal.met ? " ✓" : ""}</span>
+      ${goal.streak ? `<span class="gstreak">🔥 ${plural(goal.streak, "Woche", "Wochen")} in Folge</span>` : ""}
+    </div>`;
+  const nextHtml = next && !draft ? `
+    <button class="card next-up" data-action="start" data-i="${store.routines.indexOf(next)}">
+      <span class="grow"><span class="next-l">Als Nächstes dran</span>
+        <h2>${esc(next.name)}</h2>
+        <div class="sub">${esc(next.exercises.map((e) => e.name).filter(Boolean).join(" · "))}</div></span>
+      <span class="play big">▶</span>
+    </button>` : "";
+
   const rows = store.routines.map((r, i) => {
     const last = store.sessions.filter((s) => s.routineId === r.id).map((s) => s.date).sort().pop();
     const preview = r.exercises.slice(0, 3).map((e) => e.name).filter(Boolean).join(" · ")
@@ -262,7 +308,9 @@ function renderTraining() {
   screen.innerHTML = `
     <button class="fab" data-action="new-routine">＋</button>
     <h1 class="nav-title">Training</h1>
+    ${goalHtml}
     ${draftHtml}
+    ${nextHtml}
     ${store.routines.length
       ? `<div class="card">${rows}</div>`
       : `<div class="empty"><div class="big">${ICO_DUMBBELL}</div><h2>Keine Workouts</h2>
@@ -290,7 +338,7 @@ function renderVerlauf() {
       <span class="grow">
         <div style="display:flex;justify-content:space-between"><h3>${esc(s.routineName)}</h3>
           <span class="sub">${fmtDate(s.date)}</span></div>
-        <div class="sub2">${plural(sessionCompletedSetCount(s), "Satz", "Sätze")} · Volumen ${Math.round(sessionVolume(s))} kg</div>
+        <div class="sub2">${plural(sessionCompletedSetCount(s), "Satz", "Sätze")} · Volumen ${Math.round(sessionVolume(s))} kg${s.endDate ? ` · ${fmtDuration((new Date(s.endDate) - new Date(s.date)) / 1000)}` : ""}${(s.note?.trim() || s.tags?.length) ? " · 📝" : ""}</div>
       </span><span class="chev">›</span>
     </button>`;
 
@@ -563,10 +611,27 @@ function renderDashboard() {
   screen.innerHTML = html;
 }
 
+function syncStatusText() {
+  const c = sync.config();
+  if (!c?.token) return "Aus – nach jedem Training automatisch in ein privates GitHub-Gist sichern";
+  if (c.error) return `⚠ ${c.error}`;
+  if (c.pendingSince) return navigator.onLine ? "Wird gesichert …" : "Offline – wird nachgeholt";
+  return c.lastSync ? `✓ Gesichert ${relDate(c.lastSync)}, ${new Date(c.lastSync).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr` : "Verbunden";
+}
+
 function dataCardHtml() {
   return `
+    <div class="section-title">Einstellungen</div>
+    <div class="card">
+      <button class="row" data-action="week-goal"><span class="grow">
+        <h3 style="font-size:15px">🎯 Wochenziel</h3>
+        <div class="sub2">${plural(store.settings.weekGoal, "Einheit", "Einheiten")} pro Woche</div></span><span class="chev">›</span></button>
+    </div>
     <div class="section-title">Daten</div>
     <div class="card">
+      <button class="row" data-action="gist"><span class="grow">
+        <h3 style="font-size:15px">☁ Automatisches Backup</h3>
+        <div class="sub2" id="sync-status">${esc(syncStatusText())}</div></span><span class="chev">›</span></button>
       <button class="row" data-action="export"><span class="grow">
         <h3 style="font-size:15px">⬇ Backup exportieren</h3>
         <div class="sub2">Alle Workouts & Verlauf als JSON-Datei sichern</div></span></button>
@@ -613,6 +678,78 @@ function doImport() {
   input.click();
 }
 
+// ---------- Automatisches Backup (GitHub-Gist) ----------
+function openGistSettings() {
+  const build = () => {
+    const c = sync.config();
+    if (!c?.token) {
+      return `<div class="why-note" style="margin-top:16px">Nach jeder Änderung (Training gespeichert, Workout bearbeitet …)
+        sichert die App alles still in ein <b>privates GitHub-Gist</b>. GitHub hebt jede Fassung als Revision auf.
+        Auf einem neuen Gerät: Token eintragen → Backup wird gefunden und lässt sich wiederherstellen.</div>
+        <div class="section-title">Einmalig einrichten</div>
+        <div class="card">
+          <a class="row" href="https://github.com/settings/tokens/new?scopes=gist&description=Iron%20Journal" target="_blank" rel="noopener">
+            <span class="grow"><h3 style="font-size:15px">1. Token bei GitHub erstellen ↗</h3>
+            <div class="sub2">Nur das Häkchen „gist“ setzen, Ablauf nach Wunsch</div></span></a>
+          <div class="setrow"><input type="text" id="gist-token" style="width:100%" placeholder="2. Token hier einfügen (ghp_…)" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+          <div class="setrow"><button class="btn btn-tint btn-block" id="gist-connect">Verbinden</button></div>
+        </div>
+        <div class="why-note">Das Token liegt nur auf diesem Gerät und ist nie Teil des Backups.</div>`;
+    }
+    return `<div class="section-title">Status</div>
+      <div class="card">
+        <div class="row" style="cursor:default"><span class="grow"><h3 style="font-size:15px">☁ Verbunden</h3>
+          <div class="sub" id="gist-status">${esc(syncStatusText())}</div></span></div>
+        <button class="row" id="gist-now"><span class="grow"><h3 style="font-size:15px">Jetzt sichern</h3></span></button>
+        ${c.id ? `<a class="row" href="https://gist.github.com/${esc(c.id)}/revisions" target="_blank" rel="noopener"><span class="grow">
+          <h3 style="font-size:15px">Ältere Stände ansehen ↗</h3><div class="sub2">Revisionen im Gist</div></span></a>` : ""}
+        ${c.id ? `<button class="row" id="gist-restore"><span class="grow"><h3 style="font-size:15px">⬇ Aus Gist wiederherstellen</h3>
+          <div class="sub2">Ersetzt die Daten auf diesem Gerät</div></span></button>` : ""}
+      </div>
+      <div style="margin-top:14px"><button class="btn btn-block btn-text btn-danger" id="gist-off">Verbindung trennen</button></div>
+      <div class="why-note">Trennen löscht nur das Token auf diesem Gerät – das Gist bleibt erhalten.</div>`;
+  };
+  const modal = openModal("Automatisches Backup", build(), { single: true });
+  const repaint = () => { modal.body.innerHTML = build(); };
+  const busy = (btn, txt) => { if (btn) { btn.disabled = true; btn.textContent = txt; } };
+
+  modal.body.addEventListener("click", async (e) => {
+    const id = e.target.closest("button")?.id;
+    try {
+      if (id === "gist-connect") {
+        const token = modal.body.querySelector("#gist-token").value.trim();
+        if (!token) return;
+        busy(e.target.closest("button"), "Verbinde …");
+        const found = await sync.connect(token);
+        if (found) {
+          const act = await actionSheet(`Backup gefunden (Stand ${relDate(found.updatedAt)})`, [
+            { label: "⬇ Aus Gist wiederherstellen", act: "restore" },
+            { label: "⬆ Daten dieses Geräts hochladen (Gist überschreiben)", act: "push", danger: true },
+          ]);
+          if (act === "restore") { await sync.restore(); toast("Backup wiederhergestellt ✓"); }
+          else if (act === "push") await sync.syncNow();
+          else { sync.disconnect(); }
+        } else {
+          await sync.syncNow();
+        }
+        repaint();
+      } else if (id === "gist-now") {
+        busy(e.target.closest("button"), "Sichere …");
+        await sync.syncNow(); repaint();
+      } else if (id === "gist-restore") {
+        if (!confirm("Daten auf diesem Gerät durch das Backup im Gist ersetzen?")) return;
+        await sync.restore(); toast("Backup wiederhergestellt ✓"); repaint();
+      } else if (id === "gist-off") {
+        if (!confirm("Automatisches Backup auf diesem Gerät ausschalten?")) return;
+        sync.disconnect(); repaint();
+      }
+    } catch (err) {
+      alert(err.message || String(err));
+      repaint();
+    }
+  });
+}
+
 // ---------- Aktionen (Event-Delegation) ----------
 screen.addEventListener("click", (e) => {
   // Dashboard-Steuerung (Ebene / Metrik / Zeitraum / Serien / Theorie-Linie)
@@ -647,8 +784,20 @@ screen.addEventListener("click", (e) => {
   const b = e.target.closest("[data-action]");
   if (!b) return;
   const a = b.dataset.action;
-  if (a === "start") openSession(store.makeSession(store.routines[+b.dataset.i]));
-  else if (a === "resume-draft") { const d = store.loadDraft(); if (d) openSession(d, true); }
+  if (a === "start") {
+    // Kein stilles Überschreiben einer angefangenen Einheit.
+    const draft = store.loadDraft();
+    if (draft && !confirm(`Angefangene Einheit „${draft.routineName}“ verwerfen und neu starten?`)) return;
+    if (draft) store.clearDraft();
+    openSession(store.makeSession(store.routines[+b.dataset.i]));
+  }
+  else if (a === "resume-draft") { const d = store.loadDraft(); if (d) openSession(d, { resumed: true }); }
+  else if (a === "gist") openGistSettings();
+  else if (a === "week-goal") {
+    const v = prompt("Wie viele Einheiten pro Woche?", String(store.settings.weekGoal));
+    const n = Math.round(num(v));
+    if (v !== null && n >= 1 && n <= 14) { store.updateSettings({ weekGoal: n }); render(); }
+  }
   else if (a === "discard-draft") {
     if (confirm("Angefangene Einheit wirklich verwerfen?")) { store.clearDraft(); render(); }
   }
@@ -683,21 +832,77 @@ function openModal(title, bodyHtml, opts = {}) {
     document.body.style.overflow = modalRoot.querySelector(".modal") ? "hidden" : "";
   };
   m.querySelector('[data-x="close"]').onclick = () => { onCancel && onCancel(); close(); render(); };
-  m.querySelector('[data-x="done"]').onclick = () => { onDone && onDone(); close(); render(); };
+  // onDone kann false liefern, um offen zu bleiben (z. B. Zusammenfassung davor).
+  m.querySelector('[data-x="done"]').onclick = () => {
+    if (onDone && onDone() === false) return;
+    close(); render();
+  };
   return { el: m, body: m.querySelector(".modal-body"), close };
 }
 
+// ---------- Overlays: Bottom-Sheet, Aktionsmenü, Toast ----------
+// Leichtgewichtiges Sheet über allem (auch über Modals). Liefert { el, close }.
+function openSheet(html, { onClose } = {}) {
+  const wrap = document.createElement("div");
+  wrap.className = "sheet-wrap";
+  wrap.innerHTML = `<div class="sheet-back"></div><div class="sheet">${html}</div>`;
+  document.body.appendChild(wrap);
+  const close = () => { wrap.remove(); onClose && onClose(); };
+  wrap.querySelector(".sheet-back").onclick = close;
+  return { el: wrap.querySelector(".sheet"), close };
+}
+
+// Aktionsmenü im iOS-Stil. items: [{ label, act, danger }] → Promise<act|null>.
+function actionSheet(title, items) {
+  return new Promise((resolve) => {
+    let picked = null;
+    const sh = openSheet(`<div class="sheet-title">${esc(title)}</div>
+      <div class="sheet-list">${items.map((it) =>
+        `<button class="sheet-item ${it.danger ? "btn-danger" : ""}" data-pick="${it.act}">${esc(it.label)}</button>`).join("")}</div>
+      <button class="sheet-item sheet-cancel" data-pick="">Abbrechen</button>`,
+      { onClose: () => resolve(picked) });
+    sh.el.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-pick]"); if (!b) return;
+      picked = b.dataset.pick || null;
+      sh.close();
+    });
+  });
+}
+
+// Kurzer Hinweis unten, optional mit „Rückgängig“ (5 s).
+let toastEl = null;
+function toast(msg, undo) {
+  if (toastEl) toastEl.remove();
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.innerHTML = `<span>${esc(msg)}</span>${undo ? `<button class="btn-text">Rückgängig</button>` : ""}`;
+  document.body.appendChild(t);
+  toastEl = t;
+  const timer = setTimeout(() => t.remove(), 5000);
+  if (undo) t.querySelector("button").onclick = () => { clearTimeout(timer); t.remove(); undo(); };
+}
+
 // ---------- Aktive Einheit ----------
-function openSession(session, resumed = false) {
-  let dirty = resumed;            // fortgesetzte Entwürfe sind per Definition „angefasst“
+// opts.resumed: fortgesetzter Entwurf · opts.edit: vergangene Einheit bearbeiten
+// (kein Entwurf, kein Timer, Datum änderbar, „Fertig“ speichert direkt).
+function openSession(session, opts = {}) {
+  const { resumed = false, edit = false } = opts;
+  let formOpen = edit;        // Tagesform-Karte auf-/zugeklappt (übersteht Re-Render)
   let restInterval = null;
   let statsInterval = null;
 
-  const modal = openModal(session.routineName,
-    statsStripHtml(session) + sessionBody(session) + restBarHtml(), {
-    doneLabel: "Fertig",
+  const view = () => (edit ? editStripHtml(session) : statsStripHtml(session)) +
+    sessionBody(session, { edit, formOpen }) + (edit ? "" : restBarHtml());
+
+  const modal = openModal(edit ? `${session.routineName} bearbeiten` : session.routineName, view(), {
+    doneLabel: edit ? "Sichern" : "Fertig",
     cancelLabel: "Schließen",
-    onDone: () => { store.saveSession(session); store.clearDraft(); },
+    onDone: () => {
+      if (edit) { finalizeSession(session); store.saveSession(session); return; }
+      // Erst die Zusammenfassung zeigen; gespeichert wird dort.
+      openSummary(session, () => { modal.close(); render(); });
+      return false;
+    },
     cleanup: () => {
       clearInterval(restInterval); clearInterval(statsInterval);
       releaseWakeLock();
@@ -707,12 +912,21 @@ function openSession(session, resumed = false) {
   const body = modal.body;
 
   // Schließen verliert nichts: der Entwurf bleibt (Banner im Training-Tab).
-  function touch() { dirty = true; store.saveDraft(session); refreshStats(); }
+  function touch() { if (!edit) store.saveDraft(session); refreshStats(); }
+  if (resumed) touch();
 
   function refresh() {
-    body.innerHTML = statsStripHtml(session) + sessionBody(session) + restBarHtml();
+    const y = body.scrollTop;
+    body.innerHTML = view();
+    body.scrollTop = y;
     refreshStats();                    // sofort füllen, nicht erst beim nächsten Tick
     if (restEndAt) showRestBar();
+  }
+
+  // Nach dem Abhaken zum nächsten offenen Satz scrollen.
+  function scrollToCurrent() {
+    const cur = body.querySelector(".setrow.cur");
+    if (cur) cur.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   // -- Live-Statuszeile (Dauer · Sätze · Volumen) + Fortschrittsbalken --
@@ -730,10 +944,11 @@ function openSession(session, resumed = false) {
       `⏱ ${fmtClock(secs)} &nbsp;·&nbsp; ${done}/${total} Sätze &nbsp;·&nbsp; ${Math.round(doneVol)} kg`;
     el.querySelector(".prog i").style.width = total ? `${Math.round((done / total) * 100)}%` : "0";
   }
-  statsInterval = setInterval(refreshStats, 1000);
+  if (!edit) statsInterval = setInterval(refreshStats, 1000);
   refreshStats();
 
   // -- Pausen-Timer: startet automatisch beim Abhaken eines Satzes --
+  // Dauer nach Übungsart (Grundübung länger, Isolation kürzer – restSeconds).
   // Zeitstempel-basiert: die verbleibende Zeit wird aus der Zielzeit berechnet,
   // damit der Timer auch nach App-Wechsel / Sperrbildschirm korrekt weiterläuft
   // (setInterval wird vom Browser im Hintergrund gedrosselt oder pausiert).
@@ -767,7 +982,7 @@ function openSession(session, resumed = false) {
     if (navigator.vibrate) navigator.vibrate([300, 120, 300]);
     beep();
   }
-  function startRest(secs = 90) {
+  function startRest(secs) {
     primeAudio();             // Audio im selben Tap freischalten (iOS-Anforderung)
     restEndAt = Date.now() + secs * 1000;
     restDoneFired = false;
@@ -780,7 +995,7 @@ function openSession(session, resumed = false) {
     if (b) b.hidden = true;
   }
   // Ein einziger Sekunden-Ticker treibt den Pausen-Timer (statt pro Start neu).
-  restInterval = setInterval(tickRest, 1000);
+  if (!edit) restInterval = setInterval(tickRest, 1000);
 
   // -- Kurzer Signalton bei Pausenende --
   // AudioContext muss innerhalb einer Nutzer-Geste erzeugt/aktiviert werden,
@@ -823,12 +1038,12 @@ function openSession(session, resumed = false) {
     try { wakeLock && wakeLock.release(); } catch { /* ignorieren */ }
     wakeLock = null;
   }
-  acquireWakeLock();
+  if (!edit) acquireWakeLock();
 
   // Beim Zurückkehren in die App: Wake Lock neu anfordern (geht beim Verlassen
   // verloren) und Anzeige sofort korrigieren statt bis zum nächsten Tick warten.
   function onVisibility() {
-    if (document.visibilityState === "visible") {
+    if (document.visibilityState === "visible" && !edit) {
       acquireWakeLock();
       refreshStats();
       tickRest();
@@ -836,18 +1051,68 @@ function openSession(session, resumed = false) {
   }
   document.addEventListener("visibilitychange", onVisibility);
 
+  // Tagesform-Notiz und (im Bearbeiten-Modus) Datum.
   body.addEventListener("input", (e) => {
-    const inp = e.target.closest("input"); if (!inp) return;
-    const set = session.exercises[+inp.dataset.ex].sets[+inp.dataset.set];
-    set[inp.dataset.field] = inp.dataset.field === "reps" ? Math.round(num(inp.value)) : num(inp.value);
-    touch();
-    // Status-Pille live nachziehen – ohne Neuaufbau, damit der Fokus im Feld bleibt.
-    const slot = body.querySelector(`[data-pill-ex="${inp.dataset.ex}"]`);
-    if (slot) slot.innerHTML = sessionPill(session, +inp.dataset.ex);
-    const sugg = body.querySelector(`[data-sugg-ex="${inp.dataset.ex}"]`);
-    if (sugg) sugg.innerHTML = sessionSuggestion(session, +inp.dataset.ex);
+    const f = e.target.dataset.field;
+    if (f === "snote") { session.note = e.target.value; touch(); }
+    else if (f === "sdate" && e.target.value) {
+      const d = new Date(e.target.value);
+      if (isNaN(d)) return;
+      const shift = d - new Date(session.date);
+      session.date = d.toISOString();
+      if (session.endDate) session.endDate = new Date(new Date(session.endDate).getTime() + shift).toISOString();
+    }
   });
-  body.addEventListener("click", (e) => {
+
+  // Satz-Werte über den großen Ziffernblock ändern (statt Tastatur).
+  function editSet(ei, si) {
+    const ex = session.exercises[ei];
+    const set = ex.sets[si];
+    const rtEx = store.exercise(ex.exerciseId);
+    openNumpad({
+      title: ex.name,
+      sub: set.isWarmup ? "Aufwärmsatz" : `Satz ${workingSets(ex.sets).indexOf(set) + 1}`,
+      reps: set.reps, weight: set.weight,
+      step: rtEx?.increment > 0 ? rtEx.increment : 2.5,
+      onSave: (reps, weight, check) => {
+        set.reps = reps; set.weight = weight;
+        const wasDone = set.completed;
+        if (check) set.completed = true;
+        touch(); refresh();
+        if (check && !wasDone) afterCheck(ex);
+      },
+    });
+  }
+
+  function afterCheck(ex) {
+    if (!edit) startRest(restSeconds(ex.name));
+    scrollToCurrent();
+  }
+
+  async function exerciseMenu(ei) {
+    const ex = session.exercises[ei];
+    const act = await actionSheet(ex.name, [
+      ...(ei < session.exercises.length - 1 ? [{ label: "⤓ Später machen (ans Ende)", act: "later" }] : []),
+      { label: "⇄ Gegen andere Übung tauschen", act: "swap" },
+      { label: "⤼ Heute überspringen", act: "skip", danger: true },
+    ]);
+    if (act === "later") {
+      session.exercises.push(session.exercises.splice(ei, 1)[0]);
+      touch(); refresh();
+      toast(`${ex.name} ans Ende verschoben`);
+    } else if (act === "skip") {
+      ex.skippedSets = ex.sets; ex.sets = []; ex.skipped = true;
+      touch(); refresh();
+    } else if (act === "swap") {
+      const picked = await pickExercise(session, "Tauschen gegen");
+      if (!picked) return;
+      session.exercises[ei] = picked;
+      touch(); refresh();
+      toast(`${ex.name} → ${picked.name}`, () => { session.exercises[ei] = ex; touch(); refresh(); });
+    }
+  }
+
+  body.addEventListener("click", async (e) => {
     const why = e.target.closest("[data-why-e]");
     if (why) { openWhy(why.dataset.whyR, why.dataset.whyE, session); return; }
     const t = e.target.closest("[data-act]"); if (!t) return;
@@ -857,33 +1122,239 @@ function openSession(session, resumed = false) {
       restEndAt = base + 30000; restDoneFired = false; showRestBar(); return;
     }
     if (act === "rest-skip") { stopRest(); return; }
-    if (act === "exprog") { openProgress(session.routineId, t.dataset.exid); return; }
-    const ex = session.exercises[+t.dataset.ex];
+    if (act === "exprog") { openProgress(routineOf(t.dataset.exid)?.id, t.dataset.exid); return; }
+    if (act === "tag") {
+      const tag = t.dataset.tag;
+      session.tags = session.tags ?? [];
+      session.tags = session.tags.includes(tag) ? session.tags.filter((x) => x !== tag) : [...session.tags, tag];
+      touch(); t.classList.toggle("on"); return;
+    }
+    if (act === "note-toggle") { formOpen = !formOpen; t.closest(".dayform").classList.toggle("open", formOpen); return; }
+    if (act === "add-ex") {
+      const picked = await pickExercise(session, "Übung hinzufügen");
+      if (picked) { session.exercises.push(picked); touch(); refresh(); }
+      return;
+    }
+    const ei = +t.dataset.ex;
+    const ex = session.exercises[ei];
     if (act === "toggle") {
       const s = ex.sets[+t.dataset.set];
       s.completed = !s.completed;
       touch(); refresh();
-      if (s.completed) startRest(90);
+      if (s.completed) afterCheck(ex);
+    } else if (act === "edit-set") {
+      editSet(ei, +t.dataset.set);
+    } else if (act === "ex-menu") {
+      exerciseMenu(ei);
+    } else if (act === "unskip") {
+      ex.sets = ex.skippedSets ?? []; delete ex.skippedSets; delete ex.skipped;
+      touch(); refresh();
     } else if (act === "add-set") {
       const base = [...ex.sets].reverse().find((s) => !s.isWarmup);
       ex.sets.push({ id: crypto.randomUUID(), reps: base?.reps ?? 8, weight: base?.weight ?? 0, isWarmup: false, completed: false });
       touch(); refresh();
     } else if (act === "warmups-live") {
-      const later = (+t.dataset.ex) > 0;
+      const later = ei > 0;
       const gen = warmupTargets(topWorkingWeight(ex.sets), { later });
       if (!gen.length) { alert("Für Körpergewichtsübungen (0 kg) gibt es keine prozentualen Aufwärmsätze."); return; }
       const warm = gen.map((t) => ({ id: crypto.randomUUID(), reps: t.reps, weight: t.weight, isWarmup: true, completed: false }));
       ex.sets = [...warm, ...ex.sets.filter((s) => !s.isWarmup)];
       touch(); refresh();
     } else if (act === "del-set-live") {
-      ex.sets.splice(+t.dataset.set, 1);
+      const si = +t.dataset.set;
+      const [removed] = ex.sets.splice(si, 1);
       touch(); refresh();
+      toast("Satz gelöscht", () => { ex.sets.splice(si, 0, removed); touch(); refresh(); });
     }
+  });
+
+  if (!edit) setTimeout(scrollToCurrent, 250);
+}
+
+// Vor dem Speichern: Hilfsfelder der Live-Ansicht entfernen.
+function finalizeSession(session) {
+  for (const e of session.exercises) {
+    if (e.skipped) e.sets = [];
+    delete e.skippedSets;
+  }
+}
+
+// ---------- Großer Ziffernblock für Wdh × kg ----------
+// „Abhaken = fertig“: Werte sind vorbefüllt; nur bei Abweichung antippen.
+// Erste Eingabe ersetzt den Wert (wie Markieren + Überschreiben).
+function openNumpad({ title, sub, reps, weight, step, onSave }) {
+  const val = { reps: String(reps), weight: String(weight).replace(".", ",") };
+  let field = "weight";
+  let fresh = true;
+  const sh = openSheet(`
+    <div class="sheet-title">${esc(title)}<span class="np-sub">${esc(sub)}</span></div>
+    <div class="np-fields">
+      <button class="np-field" data-f="reps"><span class="np-l">Wdh</span><span class="np-v" data-v="reps"></span></button>
+      <span class="np-x">×</span>
+      <button class="np-field" data-f="weight"><span class="np-l">kg</span><span class="np-v" data-v="weight"></span></button>
+    </div>
+    <div class="np-steps">
+      <button class="np-step" data-step="-1">−<span data-sl></span></button>
+      <button class="np-step" data-step="1">+<span data-sl></span></button>
+    </div>
+    <div class="np-keys">${["1", "2", "3", "4", "5", "6", "7", "8", "9", ",", "0", "⌫"]
+      .map((k) => `<button class="np-key" data-k="${k}">${k}</button>`).join("")}</div>
+    <div class="np-actions">
+      <button class="btn btn-ghost" data-ok="0">Übernehmen</button>
+      <button class="btn btn-tint" data-ok="1">✓ Abhaken</button>
+    </div>`);
+  const el = sh.el;
+  const paint = () => {
+    el.querySelector('[data-v="reps"]').textContent = val.reps || "0";
+    el.querySelector('[data-v="weight"]').textContent = val.weight || "0";
+    el.querySelectorAll(".np-field").forEach((b) => b.classList.toggle("on", b.dataset.f === field));
+    const stepTxt = field === "reps" ? "1" : nf.format(step);
+    el.querySelectorAll("[data-sl]").forEach((s) => { s.textContent = ` ${stepTxt}${field === "reps" ? "" : " kg"}`; });
+    el.querySelector('[data-k=","]').style.visibility = field === "reps" ? "hidden" : "visible";
+  };
+  paint();
+  el.addEventListener("click", (e) => {
+    const f = e.target.closest("[data-f]");
+    if (f) { field = f.dataset.f; fresh = true; paint(); return; }
+    const st = e.target.closest("[data-step]");
+    if (st) {
+      const d = +st.dataset.step * (field === "reps" ? 1 : step);
+      const n = Math.max(0, Math.round((num(val[field]) + d) * 100) / 100);
+      val[field] = field === "reps" ? String(Math.round(n)) : String(n).replace(".", ",");
+      fresh = false; paint(); return;
+    }
+    const k = e.target.closest("[data-k]");
+    if (k) {
+      const key = k.dataset.k;
+      let v = fresh ? "" : val[field];
+      fresh = false;
+      if (key === "⌫") v = v.slice(0, -1);
+      else if (key === ",") { if (!v.includes(",")) v = (v || "0") + ","; }
+      else if (v.length < 6) v = v === "0" ? key : v + key;
+      val[field] = v; paint(); return;
+    }
+    const ok = e.target.closest("[data-ok]");
+    if (ok) {
+      sh.close();
+      onSave(Math.round(num(val.reps)), num(val.weight), ok.dataset.ok === "1");
+    }
+  });
+}
+
+// ---------- Übung wählen (Tauschen / Hinzufügen) ----------
+// Alle Übungen aus allen Workouts (ohne die schon in der Einheit) oder eine
+// neue Übung nur für heute. Liefert eine vorbefüllte geloggte Übung oder null.
+function pickExercise(session, title) {
+  return new Promise((resolve) => {
+    let result = null;
+    const inSession = new Set(session.exercises.map((e) => e.exerciseId));
+    const groups = store.routines.map((r) => {
+      const items = r.exercises.filter((x) => x.name && !inSession.has(x.id));
+      return items.length ? `<div class="sheet-group">${esc(r.name)}</div>` + items.map((x) =>
+        `<button class="sheet-item" data-ex="${x.id}">${esc(x.name)}</button>`).join("") : "";
+    }).join("");
+    const sh = openSheet(`<div class="sheet-title">${esc(title)}</div>
+      <div class="sheet-new"><input type="text" placeholder="Neue Übung (nur heute)" data-new>
+        <button class="btn btn-tint" data-add-new>＋</button></div>
+      <div class="sheet-list sheet-scroll">${groups || `<div class="row-hint">Keine weiteren Übungen in deinen Workouts.</div>`}</div>
+      <button class="sheet-item sheet-cancel" data-cancel>Abbrechen</button>`,
+      { onClose: () => resolve(result) });
+    sh.el.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-ex]");
+      if (b) { result = store.makeLoggedExercise(store.exercise(b.dataset.ex)); sh.close(); return; }
+      if (e.target.closest("[data-add-new]")) {
+        const name = sh.el.querySelector("[data-new]").value.trim();
+        if (!name) { sh.el.querySelector("[data-new]").focus(); return; }
+        result = store.makeAdhocExercise(name); sh.close(); return;
+      }
+      if (e.target.closest("[data-cancel]")) sh.close();
+    });
+  });
+}
+
+// ---------- Zusammenfassung nach dem Training ----------
+// Wird vor dem Speichern gezeigt: Kennzahlen, Vergleich zum letzten Mal,
+// neue Bestwerte und – falls nötig – was mit offenen Sätzen passieren soll.
+function openSummary(session, onSaved) {
+  session.endDate = new Date().toISOString();
+  const sum = sessionSummary(store, session);
+  // Ist gar nichts abgehakt, wurde vermutlich nur nicht getippt → abhaken.
+  let openMode = sum.setsDone === 0 ? "complete" : "drop";
+
+  const delta = (a, b, fmt) => {
+    const d = a - b;
+    if (Math.abs(d) < 0.5) return `<span class="why-d flat">±0</span>`;
+    return `<span class="why-d ${d > 0 ? "up" : "down"}">${d > 0 ? "+" : "−"}${fmt(Math.abs(d))}</span>`;
+  };
+  const build = () => {
+    const s = sessionSummary(store, session);
+    const vol = openMode === "complete" && s.setsOpen
+      ? s.volume + session.exercises.reduce((n, e) =>
+          n + workingSets(e.sets).filter((x) => !x.completed).reduce((m, x) => m + x.reps * x.weight, 0), 0)
+      : s.volume;
+    const sets = s.setsDone + (openMode === "complete" ? s.setsOpen : 0);
+    let html = `<div class="sum-hero">
+        <div><b>${fmtDuration(s.duration)}</b><span>Dauer</span></div>
+        <div><b>${sets}</b><span>Sätze</span></div>
+        <div><b>${Math.round(vol)} kg</b><span>Volumen</span></div>
+      </div>`;
+    if (s.setsOpen) {
+      html += `<div class="section-title">${plural(s.setsOpen, "Satz", "Sätze")} nicht abgehakt</div>
+        <div class="seg"><button class="seg-btn ${openMode === "drop" ? "on" : ""}" data-open="drop">Verwerfen</button>
+          <button class="seg-btn ${openMode === "complete" ? "on" : ""}" data-open="complete">Als erledigt zählen</button></div>`;
+    }
+    if (s.prs.length) {
+      html += `<div class="section-title">Neue Bestwerte ★</div><div class="card">` + s.prs.map((p) =>
+        `<div class="why-row"><span class="why-l">★ ${esc(p.name)}</span><span class="why-m">${nf.format(p.e1rm)} kg e1RM</span>
+          <span class="why-d up">+${nf.format(p.e1rm - p.prev)}</span></div>`).join("") + `</div>`;
+    }
+    if (s.prev) {
+      html += `<div class="section-title">Vergleich zu ${esc(session.routineName)} am ${fmtDate(s.prev.date)}</div><div class="card">
+        <div class="why-row"><span class="why-l">Volumen</span><span class="why-m">${Math.round(s.prev.volume)} → ${Math.round(vol)} kg</span>${delta(vol, s.prev.volume, (v) => `${Math.round(v)} kg`)}</div>
+        ${s.prev.duration ? `<div class="why-row"><span class="why-l">Dauer</span><span class="why-m">${Math.round(s.prev.duration / 60)} → ${Math.round(s.duration / 60)} min</span>${delta(s.duration / 60, s.prev.duration / 60, (v) => `${Math.round(v)} min`)}</div>` : ""}
+      </div>`;
+    }
+    html += `<div style="height:8px"></div>` + dayformHtml(session, true);
+    return html;
+  };
+
+  const m = openModal("Geschafft 💪", build(), {
+    doneLabel: "Speichern",
+    cancelLabel: "Zurück",
+    onCancel: () => { delete session.endDate; },
+    onDone: () => {
+      resolveOpenSets(session, openMode);
+      finalizeSession(session);
+      store.saveSession(session);
+      store.clearDraft();
+      onSaved();
+    },
+  });
+  m.body.addEventListener("click", (e) => {
+    const o = e.target.closest("[data-open]");
+    if (o) { openMode = o.dataset.open; m.body.innerHTML = build(); return; }
+    const t = e.target.closest('[data-act="tag"]');
+    if (t) {
+      const tag = t.dataset.tag;
+      session.tags = (session.tags ?? []).includes(tag) ? session.tags.filter((x) => x !== tag) : [...(session.tags ?? []), tag];
+      t.classList.toggle("on"); store.saveDraft(session);
+    }
+  });
+  m.body.addEventListener("input", (e) => {
+    if (e.target.dataset.field === "snote") { session.note = e.target.value; store.saveDraft(session); }
   });
 }
 
 function statsStripHtml() {
   return `<div class="stats-strip" id="sess-stats"><div class="ss-txt"></div><div class="prog"><i></i></div></div>`;
+}
+
+// Bearbeiten-Modus: Datum/Uhrzeit statt Live-Statuszeile.
+function editStripHtml(session) {
+  const d = new Date(session.date);
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  return `<div class="modal-grp"><div class="setrow"><span class="unit">Datum</span><span class="spacer"></span>
+    <input type="datetime-local" value="${local}" data-field="sdate"></div></div>`;
 }
 
 function restBarHtml() {
@@ -896,97 +1367,129 @@ function restBarHtml() {
   </div>`;
 }
 
-function routineExercise(session, ei) {
-  const id = session.exercises[ei]?.exerciseId;
-  return session.routineId && store.routines.find((r) => r.id === session.routineId)
-    ?.exercises.find((x) => x.id === id);
+// Tagesform: Schnell-Chips + freie Notiz. Für die spätere (externe) KI-Auswertung
+// landen beide im Backup (session.tags / session.note).
+const DAY_TAGS = ["😴 Schlecht geschlafen", "🥱 Müde", "💪 Top fit", "🤕 Schmerzen", "⏱ Wenig Zeit", "🍽 Wenig gegessen", "🤒 Angeschlagen"];
+function dayformHtml(session, open = false) {
+  const tags = session.tags ?? [];
+  const summary = [...tags, session.note?.trim()].filter(Boolean).join(" · ");
+  return `<div class="dayform ${open ? "open" : ""}">
+    <button class="dayform-head" data-act="note-toggle"><span>📝 Tagesform</span>
+      <span class="dayform-sum">${summary ? esc(summary) : "Wie fühlst du dich heute?"}</span></button>
+    <div class="dayform-body">
+      <div class="chips">${DAY_TAGS.map((t) =>
+        `<button class="chip ${tags.includes(t) ? "on" : ""}" data-act="tag" data-tag="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+      <textarea class="ex-note-input" rows="2" placeholder="Notiz, z. B. Schulter zwickt, Gym voll …" data-field="snote">${esc(session.note ?? "")}</textarea>
+    </div></div>`;
 }
 
-// Status-Pille einer Übung der laufenden Einheit: zählt die gerade
-// eingetragenen Sätze als neueste Einheit mit (live, nicht erst nach „Fertig“).
-function sessionPill(session, ei) {
-  const rtEx = routineExercise(session, ei);
-  return rtEx ? statusPill(store.progressionStatus(rtEx, session), { r: session.routineId, e: rtEx.id }) : "";
+// Routine, die eine Übung enthält (Übungen können aus anderen Workouts
+// eingetauscht sein).
+function routineOf(exerciseId) {
+  return store.routines.find((r) => r.exercises.some((x) => x.id === exerciseId)) ?? null;
 }
 
-// Erhöhungsvorschlag einer Übung der laufenden Einheit (live).
-function sessionSuggestion(session, ei) {
-  const rtEx = routineExercise(session, ei);
-  return rtEx ? suggestionLine(store.increaseSuggestion(rtEx, session)) : "";
+// Ansage für eine Übung im Training: Plan fürs heutige Training, plus kurzes
+// Lob, sobald live alle Sätze die Obergrenze erreichen.
+function sessionPlan(session, ei) {
+  const rtEx = store.exercise(session.exercises[ei]?.exerciseId);
+  if (!rtEx) return "";
+  let html = planLine(store.plan(rtEx));
+  const live = store.progressionStatus(rtEx, session);
+  if (live.kind === "readyToIncrease") html += `<br><b class="up">🎉 Alle Sätze oben – nächstes Mal ${fmtWeight(live.suggested)}</b>`;
+  return html;
 }
 
-function sessionBody(session) {
-  return session.exercises.map((ex, ei) => {
+function sessionBody(session, { edit = false, formOpen = false } = {}) {
+  // Erster offener Satz (in Übungsreihenfolge) = „jetzt dran“.
+  let cur = null;
+  for (let ei = 0; ei < session.exercises.length && !cur; ei++) {
+    const si = session.exercises[ei].sets.findIndex((s) => !s.completed);
+    if (si >= 0) cur = { ei, si };
+  }
+
+  const exHtml = session.exercises.map((ex, ei) => {
+    const menuBtn = edit ? "" : `<button class="mini-link" data-act="ex-menu" data-ex="${ei}" aria-label="Übung verschieben, tauschen, überspringen">⋯</button>`;
+    if (ex.skipped) {
+      return `<div class="ex-head skipped"><h3>${esc(ex.name)}</h3>
+        <span class="pill">übersprungen</span>
+        <button class="btn-text" data-act="unskip" data-ex="${ei}">Rückgängig</button></div>`;
+    }
     const last = store.lastSession(ex.exerciseId);
     const lastTxt = last ? "Zuletzt: " + workingSets(last.logged.sets)
       .map((s) => `${s.reps}×${fmtWeightShort(s.weight)}`).join("  ") : "";
-    const sets = ex.sets.map((s, si) => `
-      <div class="setrow ${s.completed ? "done" : ""}">
+    const sets = ex.sets.map((s, si) => {
+      const isCur = cur && cur.ei === ei && cur.si === si;
+      return `
+      <div class="setrow ${s.completed ? "done" : ""} ${isCur && !edit ? "cur" : ""}">
         <button class="check ${s.completed ? "on" : ""}" data-act="toggle" data-ex="${ei}" data-set="${si}">${s.completed ? "✓" : ""}</button>
         ${s.isWarmup ? `<span class="warm-tag">Aufwärmen</span>` : `<span class="warm-tag"></span>`}
         <span class="spacer"></span>
-        <span class="numwrap">
-          <input class="w-reps" type="number" inputmode="numeric" value="${s.reps}" data-ex="${ei}" data-set="${si}" data-field="reps">
-          <span class="times">×</span>
-          <input class="w-kg" type="number" inputmode="decimal" step="0.25" value="${s.weight}" data-ex="${ei}" data-set="${si}" data-field="weight">
-          <span class="unit">kg</span>
-        </span>
+        <button class="setval" data-act="edit-set" data-ex="${ei}" data-set="${si}">
+          <b>${s.reps}</b><span class="times">×</span><b>${fmtWeightShort(s.weight)}</b>${s.weight ? `<span class="unit">kg</span>` : ""}</button>
         <button class="del-x" data-act="del-set-live" data-ex="${ei}" data-set="${si}" aria-label="Satz löschen">✕</button>
-      </div>`).join("");
-    const rtEx = routineExercise(session, ei);
-    const linked = !!rtEx;
+      </div>`;
+    }).join("");
+    const rtEx = store.exercise(ex.exerciseId);
     const note = rtEx?.note?.trim();
-    const pill = `<span class="pill-slot" data-pill-ex="${ei}">${sessionPill(session, ei)}</span>`;
-    const sugg = `<div class="sugg" data-sugg-ex="${ei}">${sessionSuggestion(session, ei)}</div>`;
-    const inc = rtEx ? store.autoIncrement(rtEx) : 0;
-    const incTxt = inc > 0
-      ? ` <span class="auto-up">↑ automatisch +${fmtWeightShort(inc)} kg</span>` : "";
-    return `<div class="ex-head"><h3>${esc(ex.name)}</h3>${pill}
-        ${linked ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}</div>
+    const plan = edit ? "" : `<div class="sugg">${sessionPlan(session, ei)}</div>`;
+    const tags = ex.adhoc ? `<span class="pill">nur heute</span>` : "";
+    return `<div class="ex-head ${cur && cur.ei === ei && !edit ? "cur-ex" : ""}"><h3>${esc(ex.name)}</h3>${tags}
+        ${rtEx ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}${menuBtn}</div>
       ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ""}
-      ${lastTxt ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}${incTxt}</div>` : ""}
-      ${sugg}
+      ${plan}
+      ${lastTxt && !edit ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--faint)">${esc(lastTxt)}</div>` : ""}
       <div class="modal-grp" style="margin-top:4px">${sets}
         <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button>
           <span class="spacer"></span>
           <button class="btn-text warm-add" data-act="warmups-live" data-ex="${ei}">🔥 Aufwärmen</button></div>
       </div>`;
   }).join("");
+
+  return dayformHtml(session, formOpen) + exHtml +
+    `<div style="margin-top:16px"><button class="btn btn-block btn-ghost" data-act="add-ex">＋ Übung hinzufügen</button></div>`;
 }
 
 // ---------- Verlauf-Detail ----------
 function openSessionDetail(id) {
   const s = store.sessions.find((x) => x.id === id); if (!s) return;
-  const body = s.exercises.map((ex) => `
-    <div class="section-title">${esc(ex.name)}</div>
-    <div class="card">${ex.sets.map((set) => `
+  const dur = s.endDate ? Math.round((new Date(s.endDate) - new Date(s.date)) / 60000) : null;
+  const meta = [
+    `${new Date(s.date).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr`,
+    dur !== null ? `${dur} min` : "",
+    `Volumen ${Math.round(sessionVolume(s))} kg`,
+  ].filter(Boolean).join(" · ");
+  const form = [...(s.tags ?? []), s.note?.trim()].filter(Boolean);
+  const body = `<div class="section-title">${esc(s.routineName)}<span class="st-sub">${esc(meta)}</span></div>` +
+    (form.length ? `<div class="card"><div class="ex-note" style="margin:12px 16px">📝 ${esc(form.join(" · "))}</div></div>` : "") +
+    s.exercises.map((ex) => `
+    <div class="section-title">${esc(ex.name)}${ex.skipped ? " · übersprungen" : !ex.sets.length ? " · nicht gemacht" : ""}${ex.deload ? " · Deload" : ""}</div>
+    ${ex.sets.length ? `<div class="card">${ex.sets.map((set) => `
       <div class="setrow">
         <span class="check ${set.completed ? "on" : ""}" style="cursor:default">${set.completed ? "✓" : ""}</span>
         ${set.isWarmup ? `<span class="warm-tag">Aufwärmen</span>` : `<span class="warm-tag"></span>`}
         <span class="spacer"></span>
         <span>${set.reps} × ${fmtWeight(set.weight)}</span>
-      </div>`).join("")}</div>`).join("") +
-    `<div style="margin-top:24px"><button class="btn btn-block btn-ghost btn-danger" id="del">Einheit löschen</button></div>`;
+      </div>`).join("")}</div>` : ""}`).join("") +
+    `<div style="margin-top:24px"><button class="btn btn-block btn-ghost" id="edit">✎ Einheit bearbeiten</button></div>
+     <div style="margin-top:10px"><button class="btn btn-block btn-text btn-danger" id="del">Einheit löschen</button></div>`;
   const modal = openModal(fmtDate(s.date), body, { single: true });
+  modal.body.querySelector("#edit").onclick = () => {
+    modal.close();
+    openSession(structuredClone(s), { edit: true });
+  };
   modal.body.querySelector("#del").onclick = () => {
-    if (confirm("Diese Einheit löschen?")) { store.deleteSession(id); modal.close(); render(); }
+    store.deleteSession(id); modal.close(); render();
+    toast("Einheit gelöscht", () => { store.saveSession(s); render(); });
   };
 }
 
 // ---------- Dashboard: Fortschritt einer Übung ----------
 function openProgress(routineId, exerciseId) {
   function build() {
-    const r = store.routines.find((x) => x.id === routineId);
-    const ex = r?.exercises.find((x) => x.id === exerciseId);
+    const ex = store.exercise(exerciseId);
     if (!ex) return "";
     const hist = store.history(exerciseId);
-    const targetsHtml = ex.targets.map((t, i) => `
-      <div class="setrow">
-        ${t.isWarmup
-          ? `<span class="warm-tag">Aufwärmen</span>`
-          : `<span class="warm-tag" style="color:var(--faint)">Satz ${i + 1}</span>`}
-        <span class="spacer"></span><span>${t.reps} × ${fmtWeight(t.weight)}</span></div>`).join("");
-
     // Geschätztes 1RM (Epley) über den Verlauf
     let rmHtml = "";
     const rms = hist.map((h) => best1RM(h.logged)).filter((v) => v > 0);
@@ -1037,28 +1540,31 @@ function openProgress(routineId, exerciseId) {
     const statusBlock = `<div class="row" style="border:none;cursor:default">
       <span class="grow">${statusPill(st)}
         <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div>`;
-    const applyBtn = st.kind === "readyToIncrease"
-      ? `<div class="setrow"><button class="btn-text" id="apply-inc" style="color:var(--green);font-weight:700">▲ Auf ${fmtWeight(st.suggested)} erhöhen</button></div>`
-      : "";
-    return `<div class="section-title">Aktuelle Vorgabe</div>
-      <div class="card">${targetsHtml}${statusBlock}${applyBtn}${rmHtml}
-        <div class="setrow"><button class="btn-text" id="adjust">⚙ Arbeitsgewicht anpassen</button></div></div>
-      ${suggestionSection(ex)}
+    const deloadBtn = (st.kind === "deloadSuggested" || st.kind === "stalled")
+        ? `<div class="setrow"><button class="btn-text" id="deload" style="color:#ff7a85;font-weight:700">⤵ Deload einplanen (−10 % nächste Einheit)</button></div>`
+        : st.kind === "deloadPlanned"
+          ? `<div class="setrow"><button class="btn-text" id="undeload">Deload zurücknehmen</button></div>`
+          : "";
+    return `${planSection(ex)}
+      <div class="section-title">Status</div>
+      <div class="card">${statusBlock}${deloadBtn}${rmHtml}
+        <div class="setrow"><button class="btn-text" id="adjust">⚙ Gewicht fürs nächste Mal selbst festlegen</button></div></div>
       ${hist.length >= 2 ? whySection(exerciseId) : ""}
       ${charts}${table}`;
   }
 
-  const exName = store.routines.find((x) => x.id === routineId)?.exercises.find((x) => x.id === exerciseId)?.name || "";
+  routineId = routineId ?? routineOf(exerciseId)?.id;
+  const exName = store.exercise(exerciseId)?.name || "";
   const modal = openModal(exName, build(), { single: true });
   modal.body.addEventListener("click", (e) => {
-    if (e.target.id === "apply-inc") {
-      store.applySuggestedIncrease(routineId, exerciseId);
+    if (e.target.id === "deload" || e.target.id === "undeload") {
+      store.scheduleDeload(exerciseId, e.target.id === "deload");
       modal.body.innerHTML = build();
     } else if (e.target.id === "adjust") {
-      const r = store.routines.find((x) => x.id === routineId);
-      const ex = r.exercises.find((x) => x.id === exerciseId);
-      const cur = ex.targets.find((t) => !t.isWarmup)?.weight ?? 0;
-      const v = prompt("Arbeitsgewicht aller Arbeitssätze (kg):", String(cur));
+      const ex = store.exercise(exerciseId);
+      const p = store.plan(ex);
+      const cur = p.to ?? ex.targets.find((t) => !t.isWarmup)?.weight ?? 0;
+      const v = prompt("Gewicht aller Arbeitssätze im nächsten Training (kg):", String(cur));
       if (v !== null) { store.setTargetWeight(num(v), routineId, exerciseId); modal.body.innerHTML = build(); }
     }
   });
@@ -1092,6 +1598,12 @@ function openRoutineEdit(routine, isNew) {
     else if (f === "ename") routine.exercises[+inp.dataset.ex].name = inp.value;
     else if (f === "enote") routine.exercises[+inp.dataset.ex].note = inp.value;
     else if (f === "inc") routine.exercises[+inp.dataset.ex].increment = num(inp.value);
+    else if (f === "rmin" || f === "rmax") {
+      const e = routine.exercises[+inp.dataset.ex];
+      const r = { ...repRange(e) };
+      r[f === "rmin" ? "min" : "max"] = Math.round(num(inp.value));
+      e.repRange = r;
+    }
     else {
       const tg = routine.exercises[+inp.dataset.ex].targets[+inp.dataset.t];
       tg[f] = f === "reps" ? Math.round(num(inp.value)) : num(inp.value);
@@ -1112,10 +1624,19 @@ function openRoutineEdit(routine, isNew) {
       ex.targets = [...gen, ...ex.targets.filter((t) => !t.isWarmup)];
       refresh();
     }
-    else if (act === "del-ex") { routine.exercises.splice(+t.dataset.ex, 1); refresh(); }
+    else if (act === "del-ex") {
+      const i = +t.dataset.ex;
+      const [removed] = routine.exercises.splice(i, 1); refresh();
+      toast(`${removed.name || "Übung"} entfernt`, () => { routine.exercises.splice(i, 0, removed); refresh(); });
+    }
     else if (act === "add-ex") { routine.exercises.push(mkExercise("", [mkTarget(8, 0)])); refresh(); }
     else if (act === "del-routine") {
-      if (confirm("Dieses Workout löschen?")) { store.deleteRoutine(routine.id); modal.close(); render(); }
+      const idx = store.routines.findIndex((r) => r.id === routine.id);
+      const backup = idx >= 0 ? store.routines[idx] : null;
+      store.deleteRoutine(routine.id); modal.close(); render();
+      if (backup) toast(`Workout „${backup.name}“ gelöscht`, () => {
+        store.routines.splice(idx, 0, backup); store.upsertRoutine(backup); render();
+      });
     }
   });
 }
@@ -1147,7 +1668,12 @@ function editBody(routine) {
       <div class="row-hint">🔥 Aufwärmsatz zählt nicht zum Fortschritt. „Aufwärmen“ erzeugt ${ei === 0
         ? "die volle Rampe (40·60·80 %) für die erste Übung"
         : "1 Einpendel-Satz (60 %) – spätere Übung, Muskulatur schon warm"}; danach frei anpassbar.</div>
-      <div class="setrow"><span class="unit">Steigerung je Einheit</span>
+      <div class="setrow"><span class="unit">Wdh-Spanne</span>
+        <span class="spacer"></span>
+        <input class="w-reps" type="number" inputmode="numeric" value="${repRange(e).min}" data-field="rmin" data-ex="${ei}">
+        <span class="times">–</span>
+        <input class="w-reps" type="number" inputmode="numeric" value="${repRange(e).max}" data-field="rmax" data-ex="${ei}"></div>
+      <div class="setrow"><span class="unit">Gewichtsschritt</span>
         <span class="spacer"></span>
         <input class="w-kg" type="number" inputmode="decimal" step="0.25" value="${e.increment}" data-field="inc" data-ex="${ei}">
         <span class="unit">kg</span></div>
