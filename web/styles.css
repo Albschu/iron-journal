@@ -198,7 +198,9 @@ input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-app
 /* Erhöhungsvorschlag unter der Übung (live) */
 .sugg { margin: -2px 16px 6px; font-size: 13px; line-height: 1.4; color: var(--muted); }
 .sugg:empty { display: none; }
-.sugg b { color: var(--green); }
+.sugg b { color: var(--text); }
+.sugg b.up, .why-head b.up { color: var(--green); }
+.sugg b.down, .why-head b.down { color: var(--orange); }
 
 /* Erledigte Sätze */
 .setrow.done { background: rgba(61, 220, 151, 0.055); }

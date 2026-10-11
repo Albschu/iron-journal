@@ -13,22 +13,35 @@ Minimalistische Web-App (PWA) zum Tracking von Krafttraining – als Ersatz für
 - **Tagesform** – Schnell-Chips („😴 Schlecht geschlafen“, „💪 Top fit“ …) plus freie Notiz pro Einheit. Landen im Backup (`session.tags`, `session.note`) – gedacht für eine regelmäßige externe KI-Auswertung.
 - **Zusammenfassung** – Nach „Fertig“: Dauer, Sätze, Volumen, neue Bestwerte ★ und Vergleich zur letzten Einheit desselben Workouts. Nicht abgehakte Sätze: verwerfen oder als erledigt zählen.
 - **Verlauf** – Jede Einheit mit Dauer und Tagesform; vergangene Einheiten lassen sich **bearbeiten** (Sätze, Datum). Löschen mit **Rückgängig**.
-- **Steigerung & Dashboard** – Status je Übung („Stagniert“, „Bereit für mehr“ …) mit „Warum?“-Erklärung, datengestützter Erhöhungsvorschlag, Charts, Heatmap, Bestwerte.
+- **Automatische Steigerung** – Die App entscheidet, wann und um wie viel das Gewicht steigt (siehe unten), und füllt das Training so vor.
+- **Steigerung & Dashboard** – Status je Übung („Stagniert“, „Nächstes Mal mehr“ …) mit „Warum?“-Erklärung, Charts, Heatmap, Bestwerte.
 - **Deload per Tipp** – Bei „Stagniert“/„Deload sinnvoll“: nächste Einheit mit −10 %, danach geht es mit dem Gewicht von davor weiter und die Bewertung beginnt frisch.
 - **Automatisches Backup** – Nach jeder Änderung still in ein **privates GitHub-Gist** (Dashboard → Daten → Automatisches Backup; einmalig ein Token nur mit Recht „gist“). GitHub hebt jede Fassung als Revision auf; auf einem neuen Gerät Token eintragen → Backup wird gefunden und wiederhergestellt. Manueller JSON-Export/-Import bleibt.
 
 Alle Daten liegen lokal im Browser (localStorage); einziger Netzwerkzugriff ist der optionale Gist-Sync.
 
-## Steigerungsvorschlag – Datenbasis
+## Steigerung – wann und wie viel?
 
-| Regel | Quelle |
+Die App entscheidet selbst und füllt jedes Training passend vor (**Doppelprogression**). Im Training steht pro Übung genau eine Zeile, z. B. „⬆ Heute +2,5 kg → 27,5 kg · Ziel 8 Wdh“ oder „→ Gewicht halten · +1 Wdh je Satz“.
+
+| Situation | Nächstes Training |
 |---|---|
-| **+2–10 %** Last, sobald die Ziel-Wdh in **zwei Einheiten in Folge** geschafft (bzw. um 1–2 Wdh übertroffen) werden; kleiner Prozentsatz für kleine, größerer für große Muskelgruppen | ACSM Position Stand „Progression Models in Resistance Training for Healthy Adults“, *Med Sci Sports Exerc* 41(3):687–708, 2009 (Evidenzkategorie B) |
-| Absolute Sprünge: Oberkörper ≈ +1–4 kg, Unterkörper ≈ +2–7 kg je nach Trainingsstand („2-for-2“-Regel) | NSCA, *Essentials of Strength Training and Conditioning*, Kap. Program Design |
-| Wdh-Steigerung bringt praktisch dieselben Kraft-/Muskelzuwächse wie Last-Steigerung → bei zu großen Gewichtssprüngen erst Wdh steigern (Doppelprogression) | Plotkin et al., *PeerJ* 10:e14142, 2022 |
-| Extra-Wdh über dem Ziel → Reserve nach Epley (1RM = Gewicht × (1 + Wdh/30)), ≈ 3 % pro Wdh | Epley 1985 |
+| Noch nicht alle Arbeitssätze an der Obergrenze | gleiches Gewicht, **+1 Wdh je Satz** (bis zur Obergrenze) |
+| **Alle** Arbeitssätze an der Obergrenze (z. B. 4 × 12) | **+1 Gewichtsschritt** (z. B. +2,5 kg), Wdh zurück auf die Untergrenze |
+| **Zweimal in Folge** meist unter der Untergrenze | **−1 Gewichtsschritt**, Wdh auf die Untergrenze (ein schlechter Tag allein ändert nichts) |
+| Deload vorgemerkt / Gewicht von Hand festgelegt | −10 % bzw. dein Gewicht, danach wieder automatisch |
+| Körpergewicht | immer +1 Wdh je Satz |
 
-Umsetzung: Die Übung wird über ihren Namen eingeordnet (Unterkörper-Grundübung 5–10 %, max. 7,5 kg · Oberkörper-Grundübung 2,5–5 %, max. 5 kg · Isolationsübung 2–5 %, max. 2,5 kg). Innerhalb der Spanne entscheiden deine Daten: Hast du das Ziel genau erreicht, gilt der untere Rand; hat der schwächste Satz Wdh übrig, rechnet Epley den passenden Sprung aus. Gerundet wird auf die Schrittweite der Übung (mindestens ein Schritt). Liegt schon ein Schritt über der Spanne, weist die App auf die Wdh-Progression hin.
+Die **Wdh-Spanne** stellst du je Übung im Workout-Editor ein. Ohne eigene Einstellung gilt die häufigste Ziel-Wdh als Untergrenze und +4 als Obergrenze (z. B. 8–12). Der Gewichtsschritt ist die Schrittweite der Übung.
+
+Warum so: Der Sprung ist immer der kleinstmögliche und kommt erst, wenn du an der Obergrenze Reserve hast. Wer 12 Wdh schafft, schafft 8 Wdh mit einem Schritt mehr sicher (Epley: 12 Wdh ≈ 140 % der Last, 8 Wdh ≈ 127 %).
+
+| Quelle | Aussage |
+|---|---|
+| NSCA, *Essentials of Strength Training and Conditioning*, Program Design | Doppelprogression: erst Wdh in der Spanne steigern, dann Last |
+| ACSM Position Stand, *Med Sci Sports Exerc* 41(3):687–708, 2009 | Last erhöhen, sobald die Wdh-Obergrenze bzw. 1–2 Wdh über dem Ziel geschafft werden |
+| Plotkin et al., *PeerJ* 10:e14142, 2022 | Wdh-Steigerung und Last-Steigerung bringen praktisch gleich viel Kraft und Muskel |
+| Epley 1985 | 1RM ≈ Gewicht × (1 + Wdh ÷ 30) |
 
 ## Aufbau
 

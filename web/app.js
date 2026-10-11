@@ -4,7 +4,7 @@ import {
   topTargetWeight, workingSets, best1RM, linearTrend,
   warmupTargets, topWorkingWeight,
   rangeStart, trainingHeatmap, personalRecords,
-  workoutStats, WORKOUT_METRICS, LIFT_CLASSES,
+  workoutStats, WORKOUT_METRICS, repRange,
   restSeconds, nextRoutine, weekGoalStatus, sessionSummary, resolveOpenSets,
   fmtWeight, fmtWeightShort, fmtDate, fmtMetric,
 } from "./model.js";
@@ -59,13 +59,14 @@ const STATUS_META = {
   noData:          { label: "Keine Daten",     cls: "" },
   progressing:     { label: "Fortschritt",     cls: "prog" },
   maintaining:     { label: "Gehalten",        cls: "hold" },
-  readyToIncrease: { label: "Bereit für mehr", cls: "ready" },
+  readyToIncrease: { label: "Nächstes Mal mehr", cls: "ready" },
+  tooHeavy:        { label: "Etwas zu schwer", cls: "stall" },
   stalled:         { label: "Stagniert",       cls: "stall" },
   deloadSuggested: { label: "Deload sinnvoll", cls: "deload" },
   deloadPlanned:   { label: "Deload geplant",  cls: "deload" },
   deloaded:        { label: "Nach Deload",     cls: "hold" },
 };
-const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, readyToIncrease: 2, deloadPlanned: 3, deloaded: 4, maintaining: 5, progressing: 6, noData: 7 };
+const STATUS_PRIORITY = { deloadSuggested: 0, stalled: 1, tooHeavy: 2, readyToIncrease: 3, deloadPlanned: 4, deloaded: 5, maintaining: 6, progressing: 7, noData: 8 };
 
 // ids = { r: routineId, e: exerciseId } macht die Pille antippbar:
 // ein Tipp öffnet die „Warum?“-Erklärung (Vergleich der letzten zwei Einheiten).
@@ -85,9 +86,11 @@ function statusDetail(st) {
         ? `Stärker als zuletzt (+${fmtWeight(st.delta)} e1RM). Weiter so 💪`
         : "Basis erfasst – ab jetzt zählt jede Steigerung.";
     case "maintaining":
-      return "Gehalten – kein klarer Fortschritt. Versuch nächstes Mal +1 Wiederholung.";
+      return "Gleich stark wie zuletzt – nächstes Mal +1 Wdh je Satz.";
     case "readyToIncrease":
-      return `Ziel-Wiederholungen zweimal erreicht. Zeit für mehr Gewicht: +${fmtWeightShort(st.delta)} kg → ${fmtWeight(st.suggested)}${st.pct ? ` (+${pctTxt(st.pct)})` : ""}.`;
+      return `Obergrenze in allen Sätzen geschafft – nächstes Mal automatisch ${fmtWeight(st.suggested)}.`;
+    case "tooHeavy":
+      return `Zweimal unter der Wdh-Spanne – nächstes Mal automatisch ${fmtWeight(st.suggested)}.`;
     case "stalled":
       return `Seit ${st.sessions} Einheiten kein neuer Bestwert. Variiere Wdh/Tempo oder leg einen Deload ein.`;
     case "deloadSuggested":
@@ -101,47 +104,49 @@ function statusDetail(st) {
   }
 }
 
-// ---------- Erhöhungsvorschlag (wie viel mehr Gewicht?) ----------
-function pctTxt(p) { return `${nf.format(p * 100)} %`; }
+// ---------- Steigerung: Doppelprogression (wann und wie viel?) ----------
+// Die App entscheidet selbst (store.plan) und füllt das Training so vor.
+// Hier nur die Anzeige: eine Zeile im Training, eine Karte in den Details.
 
-// Kurze Zeile unter der Übung in der laufenden Einheit (live).
-function suggestionLine(sug) {
-  if (!sug) return "";
-  if (sug.bodyweight) {
-    return sug.ready ? `💡 Ziel 2× geschafft – steigere die Wiederholungen (+1 je Satz).` : "";
+// Eine Zeile unter der Übung im Training – die einzige Ansage.
+function planLine(p, when = "Heute") {
+  const { min, max } = p.range;
+  const kg = (v) => fmtWeight(v);
+  const stepTxt = `${fmtWeightShort(p.step)} kg`;
+  switch (p.kind) {
+    case "start": return `🎯 Erstes Mal: Gewicht so wählen, dass ${min}–${max} Wdh sauber gehen`;
+    case "up":    return `<b class="up">⬆ ${when} +${stepTxt} → ${kg(p.to)}</b> · Ziel ${min} Wdh`;
+    case "down":  return `<b class="down">⬇ ${when} −${stepTxt} → ${kg(p.to)}</b> · Ziel ${min} Wdh`;
+    case "deload": return `<b class="down">⤵ Deload ${when.toLowerCase()}: ${kg(p.to)}</b>`;
+    case "manual": return `<b>✎ ${when} ${kg(p.to)}</b> (von dir festgelegt)`;
+    default:
+      return p.bodyweight
+        ? `→ Ziel: +1 Wdh je Satz`
+        : `→ Gewicht halten · +1 Wdh je Satz · bei ${max} in allen: +${stepTxt}`;
   }
-  const amount = `+${fmtWeightShort(sug.delta)} kg → ${fmtWeight(sug.to)} (+${pctTxt(sug.pct)})`;
-  if (sug.ready) {
-    return `💡 Nächstes Mal: <b>${amount}</b>` +
-      (sug.bigStep ? ` · großer Sprung – alternativ erst +1–2 Wdh` : "");
-  }
-  return `💡 Nächste Erhöhung: ${amount}, sobald alle Sätze ihre Ziel-Wdh schaffen (${sug.streak}/2 Einheiten)`;
 }
 
-// Ausführliche Begründung im „Warum?“-Dialog.
-function suggestionSection(ex, live = null) {
-  const sug = store.increaseSuggestion(ex, live);
-  if (!sug || sug.bodyweight) return "";
-  const cls = LIFT_CLASSES[sug.cls];
-  const range = `${pctTxt(cls.lo)}–${pctTxt(cls.hi)}, max. ${fmtWeightShort(cls.maxKg)} kg`;
-  const surplusTxt = sug.surplus > 0
-    ? `Dein schwächster Satz lag ${sug.surplus} Wdh über dem Ziel – nach Epley entspricht das ≈ +${pctTxt(sug.dataPct)} Reserve.`
-    : `Du hast das Ziel genau erreicht (keine Extra-Wdh) – daher der untere Rand der Spanne.`;
-  const when = sug.ready
-    ? `Ziel in 2 Einheiten in Folge erreicht → jetzt erhöhen.`
-    : `Erst erhöhen, wenn alle Arbeitssätze in 2 Einheiten in Folge die Ziel-Wdh schaffen (aktuell ${sug.streak}/2).`;
-  return `<div class="section-title">Vorschlag: ${sug.ready ? "jetzt" : "nächste"} Erhöhung</div>
+// Karte „Nächstes Training“ für Details und „Warum?“: Ansage + Regel.
+function planSection(ex) {
+  const p = store.plan(ex);
+  const { min, max } = p.range;
+  const why = {
+    start: "Noch kein Verlauf – die Vorgaben gelten.",
+    up: `Letztes Mal alle Sätze mit ${max}+ Wdh geschafft. Bei einem Schritt mehr sind ${min} Wdh sicher drin.`,
+    down: `Zweimal in Folge meist unter ${min} Wdh – ein Schritt zurück, dann wieder hocharbeiten.`,
+    deload: "Vorgemerkter Deload: einmal −10 %, danach mit dem alten Gewicht weiter.",
+    manual: "Von dir festgelegt – gilt für das nächste Training, danach entscheidet wieder die App.",
+    reps: p.bodyweight ? "Körpergewicht: Fortschritt über Wiederholungen."
+      : `Noch nicht alle Sätze bei ${max} Wdh – erst Wiederholungen sammeln.`,
+  }[p.kind];
+  return `<div class="section-title">Nächstes Training</div>
     <div class="card">
-      <div class="why-head">+${fmtWeightShort(sug.delta)} kg → ${fmtWeight(sug.to)} (+${pctTxt(sug.pct)})</div>
-      <div class="why-row wrap"><span class="why-l">Wann</span><span class="why-m">${when}</span></div>
-      <div class="why-row wrap"><span class="why-l">Spanne</span><span class="why-m">${esc(cls.label)}: ${range}</span></div>
-      <div class="why-row wrap"><span class="why-l">Deine Daten</span><span class="why-m">${surplusTxt}</span></div>
-      ${sug.bigStep ? `<div class="why-row wrap"><span class="why-l">Hinweis</span><span class="why-m">Schon der kleinste Schritt (${fmtWeightShort(sug.delta)} kg = ${pctTxt(sug.pct)}) liegt über der Spanne. Alternativ erst die Wdh um 1–2 steigern (Doppelprogression) – das wirkt laut Studien ähnlich gut.</span></div>` : ""}
-    </div>
-    <div class="why-note">Grundlage: ACSM Position Stand 2009 (+2–10 %, sobald die Ziel-Wdh in zwei Einheiten in Folge
-      geschafft werden; kleinere Sprünge für kleine Muskelgruppen), NSCA „2-for-2“-Regel (Oberkörper ≈ +1–4 kg,
-      Unterkörper ≈ +2–7 kg), Plotkin et al. 2022 (Wdh- und Laststeigerung ähnlich wirksam). Gerundet auf die
-      Schrittweite der Übung.</div>`;
+      <div class="why-head plan">${planLine(p, "Nächstes Mal")}</div>
+      <div class="why-row wrap"><span class="why-l">Warum</span><span class="why-m">${esc(why)}</span></div>
+      ${p.bodyweight ? "" : `<div class="why-row wrap"><span class="why-l">Regel</span><span class="why-m">Spanne ${min}–${max} Wdh.
+        Gleiches Gewicht, jedes Mal +1 Wdh. Alle Sätze bei ${max} → +${fmtWeightShort(p.step || 2.5)} kg und zurück auf ${min}.
+        Zweimal unter ${min} → ein Schritt zurück.</span></div>`}
+    </div>`;
 }
 
 // ---------- „Warum?“ – was hat sich zur vorletzten Einheit verändert? ----------
@@ -224,7 +229,7 @@ function openWhy(routineId, exerciseId, live = null) {
   const statusCard = `<div class="card"><div class="row" style="border:none;cursor:default">
     <span class="grow"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(ex.name)}</h3>${statusPill(st)}</div>
       <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div></div>`;
-  openModal(`Warum „${label}“?`, statusCard + suggestionSection(ex, live) + whySection(exerciseId, live), { single: true });
+  openModal(`Warum „${label}“?`, statusCard + planSection(ex) + whySection(exerciseId, live), { single: true });
 }
 
 // Inline-SVGs für leere Zustände (statt system-abhängiger Emojis)
@@ -1384,17 +1389,15 @@ function routineOf(exerciseId) {
   return store.routines.find((r) => r.exercises.some((x) => x.id === exerciseId)) ?? null;
 }
 
-// Status-Pille einer Übung der laufenden Einheit: zählt die gerade
-// eingetragenen Sätze als neueste Einheit mit (live, nicht erst nach „Fertig“).
-function sessionPill(session, ei) {
+// Ansage für eine Übung im Training: Plan fürs heutige Training, plus kurzes
+// Lob, sobald live alle Sätze die Obergrenze erreichen.
+function sessionPlan(session, ei) {
   const rtEx = store.exercise(session.exercises[ei]?.exerciseId);
-  return rtEx ? statusPill(store.progressionStatus(rtEx, session), { r: routineOf(rtEx.id).id, e: rtEx.id }) : "";
-}
-
-// Erhöhungsvorschlag einer Übung der laufenden Einheit (live).
-function sessionSuggestion(session, ei) {
-  const rtEx = store.exercise(session.exercises[ei]?.exerciseId);
-  return rtEx ? suggestionLine(store.increaseSuggestion(rtEx, session)) : "";
+  if (!rtEx) return "";
+  let html = planLine(store.plan(rtEx));
+  const live = store.progressionStatus(rtEx, session);
+  if (live.kind === "readyToIncrease") html += `<br><b class="up">🎉 Alle Sätze oben – nächstes Mal ${fmtWeight(live.suggested)}</b>`;
+  return html;
 }
 
 function sessionBody(session, { edit = false, formOpen = false } = {}) {
@@ -1429,21 +1432,13 @@ function sessionBody(session, { edit = false, formOpen = false } = {}) {
     }).join("");
     const rtEx = store.exercise(ex.exerciseId);
     const note = rtEx?.note?.trim();
-    // Im Deload sagt die Markierung alles – Status/Erhöhungsvorschlag wären irreführend.
-    const pill = ex.deload ? "" : `<span class="pill-slot" data-pill-ex="${ei}">${sessionPill(session, ei)}</span>`;
-    const sugg = ex.deload ? "" : `<div class="sugg" data-sugg-ex="${ei}">${sessionSuggestion(session, ei)}</div>`;
-    const inc = rtEx && !edit ? store.autoIncrement(rtEx) : 0;
-    const incTxt = inc > 0
-      ? ` <span class="auto-up">↑ automatisch +${fmtWeightShort(inc)} kg</span>` : "";
-    const tags = [
-      ex.deload ? `<span class="pill deload">Deload −10 %</span>` : "",
-      ex.adhoc ? `<span class="pill">nur heute</span>` : "",
-    ].join("");
-    return `<div class="ex-head ${cur && cur.ei === ei && !edit ? "cur-ex" : ""}"><h3>${esc(ex.name)}</h3>${tags}${pill}
+    const plan = edit ? "" : `<div class="sugg">${sessionPlan(session, ei)}</div>`;
+    const tags = ex.adhoc ? `<span class="pill">nur heute</span>` : "";
+    return `<div class="ex-head ${cur && cur.ei === ei && !edit ? "cur-ex" : ""}"><h3>${esc(ex.name)}</h3>${tags}
         ${rtEx ? `<button class="mini-link" data-act="exprog" data-exid="${ex.exerciseId}" aria-label="Fortschritt anzeigen">📈</button>` : ""}${menuBtn}</div>
       ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ""}
-      ${lastTxt && !edit ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--muted)">${esc(lastTxt)}${incTxt}</div>` : ""}
-      ${edit ? "" : sugg}
+      ${plan}
+      ${lastTxt && !edit ? `<div class="sub2" style="margin:-2px 16px 6px;color:var(--faint)">${esc(lastTxt)}</div>` : ""}
       <div class="modal-grp" style="margin-top:4px">${sets}
         <div class="setrow"><button class="btn-text" data-act="add-set" data-ex="${ei}">＋ Satz hinzufügen</button>
           <span class="spacer"></span>
@@ -1495,13 +1490,6 @@ function openProgress(routineId, exerciseId) {
     const ex = store.exercise(exerciseId);
     if (!ex) return "";
     const hist = store.history(exerciseId);
-    const targetsHtml = ex.targets.map((t, i) => `
-      <div class="setrow">
-        ${t.isWarmup
-          ? `<span class="warm-tag">Aufwärmen</span>`
-          : `<span class="warm-tag" style="color:var(--faint)">Satz ${i + 1}</span>`}
-        <span class="spacer"></span><span>${t.reps} × ${fmtWeight(t.weight)}</span></div>`).join("");
-
     // Geschätztes 1RM (Epley) über den Verlauf
     let rmHtml = "";
     const rms = hist.map((h) => best1RM(h.logged)).filter((v) => v > 0);
@@ -1552,17 +1540,15 @@ function openProgress(routineId, exerciseId) {
     const statusBlock = `<div class="row" style="border:none;cursor:default">
       <span class="grow">${statusPill(st)}
         <div class="sub" style="margin-top:4px">${esc(statusDetail(st))}</div></span></div>`;
-    const applyBtn = st.kind === "readyToIncrease"
-      ? `<div class="setrow"><button class="btn-text" id="apply-inc" style="color:var(--green);font-weight:700">▲ Auf ${fmtWeight(st.suggested)} erhöhen</button></div>`
-      : (st.kind === "deloadSuggested" || st.kind === "stalled")
+    const deloadBtn = (st.kind === "deloadSuggested" || st.kind === "stalled")
         ? `<div class="setrow"><button class="btn-text" id="deload" style="color:#ff7a85;font-weight:700">⤵ Deload einplanen (−10 % nächste Einheit)</button></div>`
         : st.kind === "deloadPlanned"
           ? `<div class="setrow"><button class="btn-text" id="undeload">Deload zurücknehmen</button></div>`
           : "";
-    return `<div class="section-title">Aktuelle Vorgabe</div>
-      <div class="card">${targetsHtml}${statusBlock}${applyBtn}${rmHtml}
-        <div class="setrow"><button class="btn-text" id="adjust">⚙ Arbeitsgewicht anpassen</button></div></div>
-      ${suggestionSection(ex)}
+    return `${planSection(ex)}
+      <div class="section-title">Status</div>
+      <div class="card">${statusBlock}${deloadBtn}${rmHtml}
+        <div class="setrow"><button class="btn-text" id="adjust">⚙ Gewicht fürs nächste Mal selbst festlegen</button></div></div>
       ${hist.length >= 2 ? whySection(exerciseId) : ""}
       ${charts}${table}`;
   }
@@ -1571,16 +1557,14 @@ function openProgress(routineId, exerciseId) {
   const exName = store.exercise(exerciseId)?.name || "";
   const modal = openModal(exName, build(), { single: true });
   modal.body.addEventListener("click", (e) => {
-    if (e.target.id === "apply-inc") {
-      store.applySuggestedIncrease(routineId, exerciseId);
-      modal.body.innerHTML = build();
-    } else if (e.target.id === "deload" || e.target.id === "undeload") {
+    if (e.target.id === "deload" || e.target.id === "undeload") {
       store.scheduleDeload(exerciseId, e.target.id === "deload");
       modal.body.innerHTML = build();
     } else if (e.target.id === "adjust") {
       const ex = store.exercise(exerciseId);
-      const cur = ex.targets.find((t) => !t.isWarmup)?.weight ?? 0;
-      const v = prompt("Arbeitsgewicht aller Arbeitssätze (kg):", String(cur));
+      const p = store.plan(ex);
+      const cur = p.to ?? ex.targets.find((t) => !t.isWarmup)?.weight ?? 0;
+      const v = prompt("Gewicht aller Arbeitssätze im nächsten Training (kg):", String(cur));
       if (v !== null) { store.setTargetWeight(num(v), routineId, exerciseId); modal.body.innerHTML = build(); }
     }
   });
@@ -1614,6 +1598,12 @@ function openRoutineEdit(routine, isNew) {
     else if (f === "ename") routine.exercises[+inp.dataset.ex].name = inp.value;
     else if (f === "enote") routine.exercises[+inp.dataset.ex].note = inp.value;
     else if (f === "inc") routine.exercises[+inp.dataset.ex].increment = num(inp.value);
+    else if (f === "rmin" || f === "rmax") {
+      const e = routine.exercises[+inp.dataset.ex];
+      const r = { ...repRange(e) };
+      r[f === "rmin" ? "min" : "max"] = Math.round(num(inp.value));
+      e.repRange = r;
+    }
     else {
       const tg = routine.exercises[+inp.dataset.ex].targets[+inp.dataset.t];
       tg[f] = f === "reps" ? Math.round(num(inp.value)) : num(inp.value);
@@ -1678,7 +1668,12 @@ function editBody(routine) {
       <div class="row-hint">🔥 Aufwärmsatz zählt nicht zum Fortschritt. „Aufwärmen“ erzeugt ${ei === 0
         ? "die volle Rampe (40·60·80 %) für die erste Übung"
         : "1 Einpendel-Satz (60 %) – spätere Übung, Muskulatur schon warm"}; danach frei anpassbar.</div>
-      <div class="setrow"><span class="unit">Steigerung je Einheit</span>
+      <div class="setrow"><span class="unit">Wdh-Spanne</span>
+        <span class="spacer"></span>
+        <input class="w-reps" type="number" inputmode="numeric" value="${repRange(e).min}" data-field="rmin" data-ex="${ei}">
+        <span class="times">–</span>
+        <input class="w-reps" type="number" inputmode="numeric" value="${repRange(e).max}" data-field="rmax" data-ex="${ei}"></div>
+      <div class="setrow"><span class="unit">Gewichtsschritt</span>
         <span class="spacer"></span>
         <input class="w-kg" type="number" inputmode="decimal" step="0.25" value="${e.increment}" data-field="inc" data-ex="${ei}">
         <span class="unit">kg</span></div>

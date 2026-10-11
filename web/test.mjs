@@ -6,7 +6,7 @@ import {
   bestWorkingSet, warmupTargets, roundToStep, topWorkingWeight,
   linearTrend, weeklyVolumes, rangeStart, trainingHeatmap, personalRecords,
   workoutStats, WORKOUT_METRICS, sessionStrengthIndex, fmtVolume, fmtMetric, uid,
-  liftClass, epleyLoadPct, suggestIncrease,
+  liftClass, repRange, progressionPlan,
   restSeconds, nextRoutine, weekGoalStatus, sessionSummary, resolveOpenSets,
 } from "./model.js";
 
@@ -70,24 +70,39 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eq(w(s, 1), 20, "Arbeitssatz nach Speichern unverändert");
 }
 
-// ---------- Manuelles Übernehmen des Vorschlags ----------
-// 3
+// ---------- Arbeitsgewicht von Hand ----------
+// 3: ohne Verlauf → Vorgabe ändern
 {
   const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15, true), setTarget(8, 20)], 2.5)]);
   const s = freshStore([r]);
-  s.applySuggestedIncrease(s.routines[0].id, ex0(s).id);
-  eq(w(s, 0), 15, "applySuggestedIncrease lässt Aufwärmsatz");
-  eq(w(s, 1), 22.5, "applySuggestedIncrease erhöht Arbeitssatz um increment");
+  s.setTargetWeight(30, r.id, ex0(s).id);
+  eq(w(s, 0), 15, "Aufwärmsatz bleibt");
+  eq(s.makeSession(r).exercises[0].sets[1].weight, 30, "ohne Verlauf: neue Vorgabe wird vorbefüllt");
 }
-// 4
+// 4: mit Verlauf → gilt für die nächste Einheit, danach wieder Automatik
 {
-  const r = routine("Zuhause", [exercise("Liegestütze", [setTarget(25, 0)], 0)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20), setTarget(8, 20)], 2.5)]);
   const s = freshStore([r]);
-  s.applySuggestedIncrease(s.routines[0].id, ex0(s).id);
-  eq(w(s), 0, "applySuggestedIncrease No-Op bei increment 0");
+  logSession(s, r, 1000, [[8, 20, true], [8, 20, true]]);
+  s.setTargetWeight(25, r.id, ex0(s).id);
+  const ses = s.makeSession(r);
+  eq(ses.exercises[0].sets[0].weight, 25, "von Hand gesetztes Gewicht wird vorbefüllt");
+  eq(ses.exercises[0].sets[1].weight, 25, "für alle Arbeitssätze");
+  ses.date = new Date(2000).toISOString(); completeAllWorking(ses); s.saveSession(ses);
+  eqs(ex0(s).nextWeight, undefined, "nach dem Training erledigt");
 }
 
-// ---------- Vorbefüllung der nächsten Einheit (Auto-Steigerung) ----------
+// ---------- Doppelprogression: Spanne ----------
+{
+  eqs(JSON.stringify(repRange(exercise("Brustpresse", [setTarget(8, 15), setTarget(8, 20), setTarget(6, 25), setTarget(8, 25)]))),
+    '{"min":8,"max":12}', "Spanne aus häufigster Ziel-Wdh (8) → 8–12");
+  eqs(JSON.stringify(repRange(exercise("Rudern", [setTarget(8, 35), setTarget(6, 40), setTarget(5, 40), setTarget(5, 40)]))),
+    '{"min":5,"max":9}', "Rudern: meist 5 → 5–9");
+  const own = exercise("Seitheben", [setTarget(8, 10)]); own.repRange = { min: 10, max: 15 };
+  eqs(JSON.stringify(repRange(own)), '{"min":10,"max":15}', "eigene Spanne gewinnt");
+}
+
+// ---------- Doppelprogression: Vorbefüllung ----------
 // P1: ohne Verlauf → Vorgaben
 {
   const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15, true), setTarget(8, 20)], 2.5)]);
@@ -95,61 +110,86 @@ const ex0 = (s) => s.routines[0].exercises[0];
   const ses = s.makeSession(r);
   eq(ses.exercises[0].sets.length, 2, "Vorbefüllung ohne Verlauf: Satzanzahl aus Vorgaben");
   eq(ses.exercises[0].sets[1].weight, 20, "Vorbefüllung ohne Verlauf: Gewicht aus Vorgaben");
+  eqs(s.plan(ex0(s)).kind, "start", "Plan: start");
 }
-// P2: Ziel-Wdh erreicht + abgehakt → Arbeitssatz +increment, Aufwärmsatz bleibt
+// P2: unter der Obergrenze → gleiches Gewicht, +1 Wdh je Satz
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15, true), setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15, true), setTarget(8, 20), setTarget(8, 20)], 2.5)]);
   const s = freshStore([r]);
   const ses = s.makeSession(r);
-  ses.exercises[0].sets[1].completed = true; // Aufwärmen muss nicht abgehakt sein
+  ses.exercises[0].sets[1].completed = true; ses.exercises[0].sets[2].completed = true;
+  ses.exercises[0].sets[2].reps = 7;
   s.saveSession(ses);
   const next = s.makeSession(r);
-  eq(next.exercises[0].sets[0].weight, 15, "Aufwärmsatz bleibt bei Auto-Steigerung unverändert");
-  eq(next.exercises[0].sets[1].weight, 22.5, "Arbeitssatz automatisch +increment vorbefüllt");
+  eqs(s.plan(ex0(s)).kind, "reps", "Plan: Wdh steigern");
+  eq(next.exercises[0].sets[0].weight, 15, "Aufwärmsatz unverändert");
+  eq(next.exercises[0].sets[0].reps, 8, "Aufwärm-Wdh unverändert");
+  eq(next.exercises[0].sets[1].weight, 20, "gleiches Gewicht");
+  eq(next.exercises[0].sets[1].reps, 9, "8 → Ziel 9");
+  eq(next.exercises[0].sets[2].reps, 8, "7 → Ziel 8");
   eqs(next.exercises[0].sets[1].completed, false, "vorbefüllte Sätze sind nicht abgehakt");
-  eq(s.autoIncrement(ex0(s)), 2.5, "autoIncrement liefert die Schrittweite für den Hinweis");
 }
-// P3: Satz nicht abgehakt → keine Steigerung, Vorbefüllung = letzte Werte
+// P3: Wdh-Ziel wird an der Obergrenze gedeckelt
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20), setTarget(8, 20)], 2.5)]);
   const s = freshStore([r]);
-  logSession(s, r, 1000, [[8, 20, false]]);
+  logSession(s, r, 1000, [[12, 20, true], [11, 20, true]]);
   const next = s.makeSession(r);
-  eq(next.exercises[0].sets[0].weight, 20, "nicht abgehakt → Gewicht bleibt");
-  eq(s.autoIncrement(ex0(s)), 0, "nicht abgehakt → autoIncrement 0");
+  eq(next.exercises[0].sets[0].reps, 12, "an der Obergrenze bleibt 12");
+  eq(next.exercises[0].sets[1].reps, 12, "11 → 12");
+  eq(next.exercises[0].sets[1].weight, 20, "noch nicht alle Sätze oben → Gewicht bleibt");
 }
-// P4: Wdh unter Ziel → keine Steigerung
+// P4: alle Sätze an der Obergrenze → +1 Schritt, zurück auf Untergrenze
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15, true), setTarget(8, 20), setTarget(8, 20)], 2.5)]);
   const s = freshStore([r]);
-  logSession(s, r, 1000, [[6, 20, true]]);
-  eq(s.makeSession(r).exercises[0].sets[0].weight, 20, "Wdh unter Ziel → Gewicht bleibt");
-}
-// P5: Vorbefüllung nutzt die letzten TATSÄCHLICHEN Sätze (inkl. Extra-Satz)
-{
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
-  const s = freshStore([r]);
-  logSession(s, r, 1000, [[8, 25, true], [10, 25, true]]); // schwerer + ein Satz mehr
+  const ses = s.makeSession(r);
+  ses.exercises[0].sets = [
+    { id: "w", reps: 8, weight: 15, isWarmup: true, completed: false },
+    { id: "a", reps: 12, weight: 20, isWarmup: false, completed: true },
+    { id: "b", reps: 13, weight: 20, isWarmup: false, completed: true },
+  ];
+  s.saveSession(ses);
+  const p = s.plan(ex0(s));
+  eqs(p.kind, "up", "Plan: Gewicht hoch");
+  eq(p.to, 22.5, "genau ein Schritt");
   const next = s.makeSession(r);
-  eq(next.exercises[0].sets.length, 2, "Extra-Satz vom letzten Mal wird übernommen");
-  eq(next.exercises[0].sets[0].weight, 27.5, "Steigerung basiert auf letztem Ist-Gewicht");
-  eq(next.exercises[0].sets[1].reps, 10, "Wdh vom letzten Mal übernommen");
+  eq(next.exercises[0].sets[0].weight, 15, "Aufwärmsatz bleibt");
+  eq(next.exercises[0].sets[1].weight, 22.5, "Arbeitssatz +2,5 kg");
+  eq(next.exercises[0].sets[2].reps, 8, "Wdh zurück auf Untergrenze");
 }
-// P6: Deload unter Ziel-Gewicht – Wdh-Ziel erreicht → trotzdem Steigerung
+// P5: Obergrenze, aber Satz nicht abgehakt bzw. zu wenige Sätze → keine Erhöhung
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20), setTarget(8, 20)], 2.5)]);
   const s = freshStore([r]);
-  logSession(s, r, 1000, [[8, 15, true]]);
-  eq(s.makeSession(r).exercises[0].sets[0].weight, 17.5, "nach Deload greift die Steigerung wieder");
+  logSession(s, r, 1000, [[12, 20, true], [12, 20, false]]);
+  eqs(s.plan(ex0(s)).kind, "reps", "nicht abgehakt → keine Erhöhung");
+  logSession(s, r, 2000, [[12, 20, true]]);
+  eq(s.makeSession(r).exercises[0].sets.length, 2, "fehlender Satz ergänzt");
+  eqs(s.plan(ex0(s)).kind, "reps", "nur 1 von 2 Sätzen → keine Erhöhung");
 }
-// P7: Körpergewicht (increment 0) → nie automatische Steigerung
+// P6: zweimal in Folge unter der Untergrenze → einen Schritt zurück (einmal nicht)
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 30), setTarget(8, 30)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[6, 30, true], [5, 30, true]]);
+  eqs(s.plan(ex0(s)).kind, "reps", "ein schlechter Tag ändert nichts");
+  logSession(s, r, 2000, [[7, 30, true], [6, 30, true]]);
+  const p = s.plan(ex0(s));
+  eqs(p.kind, "down", "zweimal zu schwer → runter");
+  eq(p.to, 27.5, "einen Schritt");
+  const next = s.makeSession(r);
+  eq(next.exercises[0].sets[0].weight, 27.5, "vorbefüllt mit 27,5 kg");
+  eq(next.exercises[0].sets[0].reps, 8, "Wdh auf Untergrenze");
+}
+// P7: Körpergewicht → immer +1 Wdh, nie Gewicht
 {
   const r = routine("Zuhause", [exercise("Liegestütze", [setTarget(25, 0)], 0)]);
   const s = freshStore([r]);
   logSession(s, r, 1000, [[30, 0, true]]);
   const next = s.makeSession(r);
   eq(next.exercises[0].sets[0].weight, 0, "Körpergewicht bleibt 0");
-  eq(next.exercises[0].sets[0].reps, 30, "letzte Wdh vorbefüllt");
+  eq(next.exercises[0].sets[0].reps, 31, "+1 Wdh, ohne Obergrenze");
 }
 
 // ---------- Statuslogik ----------
@@ -161,16 +201,16 @@ const ex0 = (s) => s.routines[0].exercises[0];
 }
 // 6: progressing
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(5, 100)], 2.5)]);
   const s = freshStore([r]);
-  logSession(s, r, 1000, [[5, 100, true]]);   // Wdh<Ziel → kein readyToIncrease
+  logSession(s, r, 1000, [[5, 100, true]]);
   logSession(s, r, 2000, [[5, 105, true]]);
   const st = s.progressionStatus(ex0(s));
   eqs(st.kind, "progressing", "progressing bei steigendem e1RM");
 }
 // 7: maintaining
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(5, 100)], 2.5)]);
   const s = freshStore([r]);
   logSession(s, r, 1000, [[5, 100, true]]);
   logSession(s, r, 2000, [[5, 100, true]]);
@@ -178,7 +218,7 @@ const ex0 = (s) => s.routines[0].exercises[0];
 }
 // 8: stalled
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(5, 100)], 2.5)]);
   const s = freshStore([r]);
   logSession(s, r, 1000, [[5, 100, true]]);
   logSession(s, r, 2000, [[5, 95, true]]);
@@ -190,7 +230,7 @@ const ex0 = (s) => s.routines[0].exercises[0];
 }
 // 9: deloadSuggested
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(5, 100)], 2.5)]);
   const s = freshStore([r]);
   logSession(s, r, 1000, [[5, 100, true]]);
   for (let i = 1; i <= 5; i++) logSession(s, r, 1000 + i * 1000, [[5, 95, true]]);
@@ -198,15 +238,22 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eqs(st.kind, "deloadSuggested", "deloadSuggested nach 5 Einheiten");
   eq(st.sessions, 5, "deload zählt 5 Einheiten");
 }
-// 10: readyToIncrease
+// 10: readyToIncrease = alle Sätze an der Obergrenze
 {
   const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
   const s = freshStore([r]);
-  logSession(s, r, 1000, [[8, 20, true]]);
-  logSession(s, r, 2000, [[8, 20, true]]);
+  logSession(s, r, 1000, [[12, 20, true]]);
   const st = s.progressionStatus(ex0(s));
-  eqs(st.kind, "readyToIncrease", "readyToIncrease bei zweimal erreichtem Ziel");
-  eq(st.suggested, 22.5, "Vorschlag = Arbeitsgewicht + increment");
+  eqs(st.kind, "readyToIncrease", "readyToIncrease an der Obergrenze");
+  eq(st.suggested, 22.5, "nächstes Mal 22,5 kg");
+}
+// 10b: tooHeavy
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 30)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1000, [[5, 30, true]]);
+  logSession(s, r, 2000, [[6, 30, true]]);
+  eqs(s.progressionStatus(ex0(s)).kind, "tooHeavy", "zweimal unter der Spanne → zu schwer");
 }
 // 11: Körpergewicht → kein readyToIncrease (increment 0)
 {
@@ -219,7 +266,7 @@ const ex0 = (s) => s.routines[0].exercises[0];
 
 // 11b: Live-Status – die laufende Einheit zählt als neueste mit
 {
-  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 20)], 2.5)]);
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(5, 100)], 2.5)]);
   const s = freshStore([r]);
   logSession(s, r, 1000, [[5, 100, true]]);
   logSession(s, r, 2000, [[5, 95, true]]);
@@ -244,40 +291,11 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eqs(s.progressionStatus(ex0(s), edit).kind, "progressing", "Live-Fassung ersetzt die gespeicherte");
 }
 
-// 11c: Erhöhungsvorschlag (ACSM 2–10 %, Epley, NSCA-Deckel, Schrittweite)
+// 11c: Übungsklassen
 {
-  const lg = (reps, weight, n = 3) => ({ sets: Array.from({ length: n }, () => ({ reps, weight, isWarmup: false, completed: true })) });
   eqs(liftClass("Kniebeugen"), "lower", "Kniebeugen = Unterkörper");
   eqs(liftClass("Beinstrecker"), "small", "Beinstrecker = Isolation (vor Unterkörper geprüft)");
   eqs(liftClass("Bankdrücken"), "upper", "Standard = Oberkörper-Grundübung");
-  eq(epleyLoadPct(8, 0), 0, "ohne Extra-Wdh keine Reserve");
-  const bench = exercise("Bankdrücken", [setTarget(8, 60), setTarget(8, 60)], 2.5);
-  eq(suggestIncrease(bench, lg(8, 60)).delta, 2.5, "Bank 60 kg, Ziel genau: +2,5 kg (unterer Rand 2,5 %)");
-  const squat = exercise("Kniebeugen", [setTarget(5, 100)], 2.5);
-  eq(suggestIncrease(squat, lg(5, 100)).delta, 5, "Kniebeuge 100 kg: +5 kg (5 %)");
-  eq(suggestIncrease(squat, lg(9, 100)).delta, 7.5, "viele Extra-Wdh: gedeckelt auf 7,5 kg");
-  const dl = exercise("Kreuzheben", [setTarget(5, 180)], 2.5);
-  eq(suggestIncrease(dl, lg(5, 180)).delta, 7.5, "Kreuzheben 180 kg: NSCA-Deckel 7,5 kg");
-  const curl = exercise("Bizeps Curls", [setTarget(10, 12)], 2);
-  const c = suggestIncrease(curl, lg(10, 12));
-  eq(c.delta, 2, "Curl: mindestens ein Schritt");
-  eq(c.bigStep ? 1 : 0, 1, "Curl 12→14 kg liegt über der Spanne (großer Sprung)");
-  eqs(suggestIncrease(exercise("Liegestütze", [setTarget(20, 0)], 0), lg(20, 0)), null, "Körpergewicht: kein Gewichtsvorschlag");
-
-  // Store: Bereitschaft (2 Einheiten in Folge) + Status/Übernahme nutzen den Betrag
-  const r = routine("Beine", [exercise("Kniebeugen", [setTarget(5, 100)], 2.5)]);
-  const s = freshStore([r]);
-  logSession(s, r, 1000, [[5, 100, true]]);
-  let sug = s.increaseSuggestion(ex0(s));
-  eq(sug.streak, 1, "1/2 Einheiten geschafft");
-  eq(sug.ready ? 1 : 0, 0, "noch nicht bereit");
-  logSession(s, r, 2000, [[5, 100, true]]);
-  sug = s.increaseSuggestion(ex0(s));
-  eq(sug.ready ? 1 : 0, 1, "nach 2 Einheiten bereit");
-  const st = s.progressionStatus(ex0(s));
-  eq(st.suggested, 105, "Status schlägt 105 kg vor");
-  s.applySuggestedIncrease(r.id, ex0(s).id);
-  eq(ex0(s).targets[0].weight, 105, "Übernahme erhöht um den Vorschlag (+5 kg)");
 }
 
 // ---------- Verlauf ----------
@@ -594,7 +612,7 @@ const ex0 = (s) => s.routines[0].exercises[0];
   const next = s.makeSession(r);
   eq(next.exercises[0].sets.length, 3, "fehlende Sätze aus der Vorgabe ergänzt");
   eq(next.exercises[0].sets[2].weight, 25, "mit dem letzten Arbeitsgewicht");
-  eq(next.exercises[0].sets[2].reps, 6, "mit den Ziel-Wdh der Vorgabe");
+  eq(next.exercises[0].sets[2].reps, 7, "Ziel-Wdh der Vorgabe (6) +1");
 }
 // Deload per Tipp
 {
@@ -613,7 +631,7 @@ const ex0 = (s) => s.routines[0].exercises[0];
   eqs(s.progressionStatus(ex0(s)).kind, "deloaded", "nach dem Deload: frischer Start");
   const after = s.makeSession(r);
   eq(after.exercises[0].sets[0].weight, 95, "danach geht es mit dem Gewicht von vor dem Deload weiter");
-  eq(s.autoIncrement(ex0(s)), 0, "keine Auto-Steigerung direkt nach dem Deload");
+  eqs(s.plan(ex0(s)).kind, "reps", "nach dem Deload: normal weiter mit Wdh-Steigerung");
   s.scheduleDeload(ex0(s).id); s.scheduleDeload(ex0(s).id, false);
   eqs(ex0(s).deloadNext, undefined, "Deload-Vormerkung zurücknehmbar");
 }
