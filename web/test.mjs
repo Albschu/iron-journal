@@ -8,6 +8,7 @@ import {
   workoutStats, WORKOUT_METRICS, sessionStrengthIndex, fmtVolume, fmtMetric, uid,
   liftClass, repRange, progressionPlan,
   restSeconds, nextRoutine, weekGoalStatus, sessionSummary, resolveOpenSets,
+  repRangeFromHistory, freshStart,
 } from "./model.js";
 
 // In-Memory-Storage als localStorage-Ersatz.
@@ -612,8 +613,83 @@ const ex0 = (s) => s.routines[0].exercises[0];
   const next = s.makeSession(r);
   eq(next.exercises[0].sets.length, 3, "fehlende Sätze aus der Vorgabe ergänzt");
   eq(next.exercises[0].sets[2].weight, 25, "mit dem letzten Arbeitsgewicht");
-  eq(next.exercises[0].sets[2].reps, 7, "Ziel-Wdh der Vorgabe (6) +1");
+  eq(next.exercises[0].sets[2].reps, 9, "ergänzter Satz: Untergrenze (8) +1");
 }
+// ---------- Echte Daten statt alter Vorgaben ----------
+const DAY = 86400000;
+// Spanne aus dem Verlauf festschreiben (Vorgabe 15 Wdh, gemacht 8–10)
+{
+  const r = routine("Pull", [exercise("Facepulls", [setTarget(15, 15), setTarget(15, 15), setTarget(15, 15)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1 * DAY, [[8, 15, true], [8, 15, true], [10, 15, true]]);
+  logSession(s, r, 3 * DAY, [[7, 15, true], [8, 15, true]]);
+  eqs(JSON.stringify(repRangeFromHistory(s.history(ex0(s).id))), '{"min":8,"max":12}', "Median der echten Wdh → 8–12");
+  eqs(s.plan(ex0(s)).kind, "down", "mit alter Spanne 15–19: fälschlich ‚runter‘");
+  eqs(s.backfillRepRanges(), true, "Spanne wird festgeschrieben");
+  eqs(s.plan(ex0(s)).kind, "reps", "mit echter Spanne: Gewicht halten, Wdh steigern");
+  eqs(s.backfillRepRanges(), false, "einmalig – danach wandert die Spanne nicht mit");
+  // Echte Wdh innerhalb der Vorgaben-Spanne → Vorgaben-Spanne bleibt (Erhöhung fällig)
+  const r2 = routine("Push", [exercise("Brustpresse", [setTarget(8, 25), setTarget(8, 25)], 2.5)]);
+  const s2 = freshStore([r2]);
+  logSession(s2, r2, 1 * DAY, [[12, 25, true], [12, 25, true]]);
+  s2.backfillRepRanges();
+  eqs(JSON.stringify(ex0(s2).repRange), '{"min":8,"max":12}', "12 Wdh passen in 8–12 → Spanne bleibt");
+  eqs(s2.plan(ex0(s2)).kind, "up", "fällige Erhöhung geht nicht verloren");
+  const imp = new Store(memStorage());
+  imp.importData(JSON.stringify({ routines: s.routines.map((x) => ({ ...x, exercises: x.exercises.map((e) => ({ ...e, repRange: undefined })) })), sessions: s.sessions }));
+  eq(imp.routines[0].exercises[0].repRange.min, 8, "Import schreibt Spannen ebenfalls fest");
+}
+// Satzzahl nach eigener Praxis, nicht nach Vorgabe
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15), setTarget(8, 15), setTarget(8, 15), setTarget(8, 15)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1 * DAY, [[8, 15, true], [8, 15, true], [6, 15, true]]);
+  logSession(s, r, 3 * DAY, [[8, 15, true], [8, 15, true], [7, 15, true]]);
+  eq(s.makeSession(r).exercises[0].sets.length, 3, "immer 3 gemacht → 3 vorbefüllt (Vorgabe 4)");
+  logSession(s, r, 5 * DAY, [[8, 15, true]]);
+  eq(s.makeSession(r).exercises[0].sets.length, 3, "einmal nur 1 Satz → trotzdem wieder 3");
+}
+// Pause > 3 Wochen: kein Stagniert/Deload, frischer Vergleich
+{
+  const r = routine("Push", [exercise("Bankdrücken", [setTarget(8, 15)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1 * DAY, [[8, 17.5, true]]);
+  for (let i = 1; i <= 5; i++) logSession(s, r, (1 + 3 * i) * DAY, [[8, 15, true]]);
+  eqs(s.progressionStatus(ex0(s)).kind, "deloadSuggested", "ohne Pause: Deload sinnvoll");
+  logSession(s, r, 60 * DAY, [[8, 12.5, true]]);
+  eqs(JSON.stringify(freshStart(s.history(ex0(s).id))), '{"index":6,"reason":"gap"}', "Pause erkannt");
+  const st = s.progressionStatus(ex0(s));
+  eqs(st.kind, "fresh", "nach Pause: Wiedereinstieg statt Deload");
+  eqs(st.reason, "gap", "Grund: Pause");
+  logSession(s, r, 63 * DAY, [[9, 12.5, true]]);
+  eqs(s.progressionStatus(ex0(s)).kind, "progressing", "danach normal bewertet – nur der neue Abschnitt zählt");
+}
+// Zweimal zu schwer zählt nicht über eine Pause hinweg
+{
+  const r = routine("Push", [exercise("Schulterpresse", [setTarget(8, 15)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1 * DAY, [[6, 15, true], [6, 15, true]]);
+  logSession(s, r, 40 * DAY, [[6, 15, true], [5, 15, true]]);
+  eqs(s.plan(ex0(s)).kind, "reps", "ein schwacher Tag nach Pause → noch kein Rückschritt");
+  logSession(s, r, 43 * DAY, [[6, 15, true], [6, 15, true]]);
+  eqs(s.plan(ex0(s)).kind, "down", "zweimal im neuen Abschnitt → runter");
+}
+// Gerätewechsel (32 kg → 5 kg): neuer Ausgangswert statt Stagniert
+{
+  const r = routine("Push", [exercise("Fly", [setTarget(8, 25)], 2.5)]);
+  const s = freshStore([r]);
+  logSession(s, r, 1 * DAY, [[8, 30, true]]);
+  logSession(s, r, 3 * DAY, [[8, 32, true]]);
+  logSession(s, r, 5 * DAY, [[8, 5, true]]);
+  const st = s.progressionStatus(ex0(s));
+  eqs(st.kind, "fresh", "Gewicht mehr als halbiert → neuer Abschnitt");
+  eqs(st.reason, "equipment", "Grund: Gerätewechsel");
+  logSession(s, r, 7 * DAY, [[8, 7.5, true]]);
+  eqs(s.progressionStatus(ex0(s)).kind, "progressing", "Vergleich nur noch mit dem neuen Gerät");
+  eqs(freshStart([{ date: 0, logged: { sets: [{ reps: 8, weight: 5, isWarmup: false }] } },
+    { date: DAY, logged: { sets: [{ reps: 8, weight: 10, isWarmup: false }] } }]).reason, null, "genau verdoppelt (5 → 10 kg) gilt noch als Steigerung");
+}
+
 // Deload per Tipp
 {
   const r = routine("Push", [exercise("Bankdrücken", [setTarget(5, 100)], 2.5)]);

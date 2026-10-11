@@ -306,8 +306,9 @@ export function liftClass(name = "") {
   return "upper";
 }
 
-/// Wdh-Spanne einer Übung: selbst eingestellt (ex.repRange) oder abgeleitet
-/// aus den Vorgaben – häufigste Ziel-Wdh als Untergrenze, +4 als Obergrenze.
+/// Wdh-Spanne einer Übung: selbst eingestellt bzw. aus dem Verlauf
+/// festgeschrieben (ex.repRange, siehe backfillRepRanges) oder – bei neuen
+/// Übungen – aus den Vorgaben: häufigste Ziel-Wdh als Untergrenze, +4 oben.
 export function repRange(ex) {
   const r = ex.repRange;
   if (r && r.min > 0 && r.max >= r.min) return { min: r.min, max: r.max };
@@ -317,6 +318,34 @@ export function repRange(ex) {
   let min = 8, best = 0;
   for (const [x, n] of count) if (n > best || (n === best && x < min)) { min = x; best = n; }
   return { min, max: min + 4 };
+}
+
+/// Spanne aus den tatsächlich gemachten Wdh (Median der Arbeitssätze der
+/// letzten bis zu 3 Einheiten) – für Übungen, deren Vorgaben veraltet sind.
+export function repRangeFromHistory(history) {
+  const reps = history.slice(-3)
+    .flatMap((e) => workingSets(e.logged.sets).map((s) => s.reps))
+    .filter((r) => r > 0)
+    .sort((a, b) => a - b);
+  if (!reps.length) return null;
+  const min = Math.min(20, Math.max(3, reps[Math.floor((reps.length - 1) / 2)]));
+  return { min, max: min + 4 };
+}
+
+/// Ab wann zählt der Verlauf für die Bewertung? Nach einer Trainingspause von
+/// mehr als 3 Wochen (Kraftverlust ist dann normal, kein Stillstand) bzw. nach
+/// einem Gerätewechsel (Arbeitsgewicht mehr als halbiert oder verdoppelt)
+/// beginnt der Vergleich frisch. Liefert { index, reason } – index = erste
+/// Einheit des aktuellen Abschnitts, reason ∈ null | "gap" | "equipment".
+export const COMEBACK_DAYS = 21;
+export function freshStart(entries) {
+  for (let i = entries.length - 1; i > 0; i--) {
+    const a = entries[i - 1], b = entries[i];
+    if ((new Date(b.date) - new Date(a.date)) / DAY_MS > COMEBACK_DAYS) return { index: i, reason: "gap" };
+    const wa = exerciseTopWeight(a.logged), wb = exerciseTopWeight(b.logged);
+    if (wa > 0 && wb > 0 && (wb < wa * 0.5 || wb > wa * 2)) return { index: i, reason: "equipment" };
+  }
+  return { index: 0, reason: null };
 }
 
 const doneWorking = (logged) => workingSets(logged.sets).filter((s) => s.completed);
@@ -350,7 +379,9 @@ export function progressionPlan(ex, history) {
     const d = doneWorking(e.logged);
     return d.length > 0 && d.filter((s) => s.reps < range.min).length * 2 > d.length;
   };
-  const prev = real.at(-2);
+  // Zu schwer nur innerhalb des aktuellen Abschnitts (nicht über Pause/Gerätewechsel hinweg).
+  const seg = real.slice(freshStart(real).index);
+  const prev = seg.length >= 2 ? seg.at(-2) : null;
   if (!bodyweight && prev && exerciseTopWeight(prev.logged) === from && below(last) && below(prev) && from - step > 0) {
     return { ...base, kind: "down", to: from - step };
   }
@@ -475,6 +506,27 @@ export class Store {
     this.sessions = s ?? [];
     this.onChange = null;   // Hook für den Gist-Sync (wird nach jedem Speichern gerufen)
     if (!r || !s) this._save();
+    else if (this.backfillRepRanges()) this._save();
+  }
+
+  /// Übungen mit Verlauf, aber ohne eigene Spanne: Spanne einmalig
+  /// festschreiben – aus den Vorgaben, wenn deine echten Wdh hineinpassen, sonst
+  /// aus den tatsächlich gemachten Wdh (alte Vorgaben stammen oft noch aus
+  /// Notizen und passen nicht). Festgeschrieben, damit die Spanne nicht mit
+  /// jeder Einheit mitwandert. Liefert true, wenn etwas geändert wurde.
+  backfillRepRanges() {
+    let changed = false;
+    for (const r of this.routines) for (const ex of r.exercises) {
+      if (ex.repRange) continue;
+      const range = repRangeFromHistory(this.history(ex.id));
+      if (!range) continue;
+      // Liegen deine echten Wdh innerhalb der Spanne aus den Vorgaben, passt
+      // sie – dann bleibt sie (sonst ginge eine fällige Erhöhung verloren).
+      const fromTargets = repRange({ ...ex, repRange: null });
+      ex.repRange = range.min >= fromTargets.min && range.min <= fromTargets.max ? fromTargets : range;
+      changed = true;
+    }
+    return changed;
   }
 
   _load(key) {
@@ -553,12 +605,15 @@ export class Store {
     }
     const sets = p.last.sets.map((s) => ({ reps: s.reps, weight: s.weight, isWarmup: s.isWarmup }));
     // Wurden letztes Mal Sätze ausgelassen (offene Sätze verworfen), fällt die
-    // Satzzahl trotzdem nie unter die Vorgabe – fehlende kommen mit dem
-    // letzten Arbeitsgewicht dazu.
-    const goals = ex.targets.filter((t) => !t.isWarmup);
+    // Satzzahl nicht unter deine übliche – das Maximum der letzten 3 Einheiten
+    // (bei weniger als 2 Einheiten mindestens die Vorgabe). Fehlende Sätze
+    // kommen mit dem letzten Arbeitsgewicht und der Wdh-Untergrenze dazu.
+    const recent = this.history(ex.id).filter((e) => !e.logged.deload).slice(-3);
+    let want = Math.max(0, ...recent.map((e) => workingSets(e.logged.sets).length));
+    if (recent.length < 2) want = Math.max(want, ex.targets.filter((t) => !t.isWarmup).length);
     const work = sets.filter((s) => !s.isWarmup);
-    for (const t of goals.slice(work.length))
-      sets.push({ reps: t.reps, weight: work.at(-1)?.weight ?? t.weight, isWarmup: false });
+    for (let i = work.length; i < want; i++)
+      sets.push({ reps: p.range.min, weight: work.at(-1)?.weight ?? 0, isWarmup: false });
 
     const { min, max } = p.range;
     const step = p.step || 2.5;
@@ -638,7 +693,7 @@ export class Store {
 
   /// Status einer Übung für Steigerung-Tab und „Warum?“. kind ∈ noData |
   /// progressing | maintaining | readyToIncrease | tooHeavy | stalled |
-  /// deloadSuggested | deloadPlanned | deloaded.
+  /// deloadSuggested | deloadPlanned | deloaded | fresh (nach Pause/Gerätewechsel).
   /// liveSession (optional): laufende Einheit, die als neueste mitzählt.
   progressionStatus(ex, liveSession = null) {
     const all = this._historyWithLive(ex.id, liveSession);
@@ -646,8 +701,15 @@ export class Store {
     // Nach einem Deload beginnt die Bewertung frisch.
     const dl = all.findLastIndex((e) => e.logged.deload);
     if (dl >= 0 && dl === all.length - 1) return { kind: "deloaded" };
-    const entries = dl >= 0 ? all.slice(dl + 1) : all;
+    const afterDeload = dl >= 0 ? all.slice(dl + 1) : all;
+    // Nach Pause bzw. Gerätewechsel zählt nur der aktuelle Abschnitt.
+    const fresh = freshStart(afterDeload);
+    const entries = afterDeload.slice(fresh.index);
     if (entries.length === 0) return { kind: "noData" };
+    if (fresh.reason && entries.length === 1) {
+      const p = progressionPlan({ ...ex, deloadNext: false, nextWeight: 0 }, entries);
+      if (p.kind !== "up") return { kind: "fresh", reason: fresh.reason };
+    }
     const last = entries[entries.length - 1];
 
     // 1) Obergrenze in allen Sätzen geschafft bzw. zweimal zu schwer?
@@ -744,6 +806,7 @@ export class Store {
       if (!Array.isArray(d.routines) || !Array.isArray(d.sessions)) return false;
       this.routines = d.routines;
       this.sessions = d.sessions;
+      this.backfillRepRanges();
       this._save();
       return true;
     } catch {
